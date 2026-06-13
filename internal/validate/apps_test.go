@@ -3,6 +3,7 @@ package validate_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -19,19 +20,24 @@ func TestAppConfigBlobs(t *testing.T) {
 		if walkErr != nil {
 			return walkErr
 		}
-		if d.IsDir() || d.Name() != "app.config.v1.json" {
+		if d.IsDir() {
+			return nil
+		}
+		if d.Name() != "app.config.v1.json" {
 			return nil
 		}
 		configs = append(configs, path)
 		return nil
 	})
 	require.NoError(t, err)
-	require.NotEmpty(t, configs, "expected at least one app.config.v1.json under apps/")
+	require.NotEmpty(t, configs, "expected at least one app config blob under apps/")
 
 	for _, path := range configs {
 		path := path
-		appName := filepath.Base(filepath.Dir(path))
-		t.Run(appName, func(t *testing.T) {
+		rel, err := filepath.Rel(root, path)
+		require.NoError(t, err)
+		testName := strings.TrimSuffix(rel, ".json")
+		t.Run(testName, func(t *testing.T) {
 			t.Helper()
 			body, err := os.ReadFile(path)
 			require.NoError(t, err)
@@ -39,8 +45,8 @@ func TestAppConfigBlobs(t *testing.T) {
 			cfg, err := validate.ParseAppConfig(body)
 			require.NoError(t, err)
 			require.NotEmpty(t, cfg.Description)
-			require.NotNil(t, cfg.Start, "%s must define start", appName)
-			require.NotEmpty(t, cfg.Start.Command, "%s start.command is required", appName)
+			require.NotNil(t, cfg.Start, "%s must define start", testName)
+			require.NotEmpty(t, cfg.Start.Command, "%s start.command is required", testName)
 		})
 	}
 }

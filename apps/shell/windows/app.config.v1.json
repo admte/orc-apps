@@ -6,8 +6,8 @@
     "properties": {
       "cmd": {
         "type": "string",
-        "description": "Command to execute",
-        "contentMediaType": "text/x-sh"
+        "description": "Command to execute (cmd.exe syntax)",
+        "contentMediaType": "text/plain"
       },
       "dir": {
         "type": "string",
@@ -17,6 +17,6 @@
     }
   },
   "start": {
-    "command": "cd \"${DIR:-.}\" && sh \"${CMD_FILE}\""
+    "command": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"if ($env:DIR) { Set-Location -LiteralPath $env:DIR }; cmd.exe /c (Get-Content -Raw -LiteralPath $env:CMD_FILE)\""
   }
 }

@@ -10,20 +10,21 @@ This repo holds app **sources** (config blobs, lifecycle scripts, helper binarie
 
 ```text
 apps/
-  shell/                 manifest-only app (config blob only)
-    app.config.v1.json   OCI config blob (orc-artifact naming convention)
+  shell/
+    linux/app.config.v1.json
+    windows/app.config.v1.json
 internal/                shared Go helpers and validation
 go.mod
 .github/workflows/       CI and release publishing
 ```
 
-Config blobs use the filename `app.config.v1.json` so `orc-artifact push` discovers the correct media type (`application/vnd.orc8r.app.config.v1+json`).
+Each platform directory contains `app.config.v1.json` — the filename `orc-artifact push` expects.
 
 ## Apps
 
 | App | Status | Notes |
 |-----|--------|-------|
-| shell | draft | Arbitrary shell command via `CMD_FILE` |
+| shell | draft | Arbitrary command via `CMD_FILE`; linux + windows (multi-platform index) |
 | apt | planned | |
 | cppdevtools | planned | |
 | uv | planned | |
@@ -42,9 +43,17 @@ make tidy      # refresh go.sum
 
 ### Publish shell locally (after orc-artifact login)
 
+Multi-platform (linux amd64 + windows amd64):
+
+```bash
+make push-shell
+```
+
+Linux-only:
+
 ```bash
 orc-artifact push ghcr.io/admte/shell:1.0.0,default \
-  apps/shell/app.config.v1.json
+  apps/shell/linux/app.config.v1.json
 ```
 
 Release tags use `<app>/<version>`, for example `shell/1.0.0`.

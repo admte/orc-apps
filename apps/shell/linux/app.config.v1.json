@@ -1,0 +1,22 @@
+{
+  "description": "Run an arbitrary shell command",
+  "params": {
+    "type": "object",
+    "required": ["cmd"],
+    "properties": {
+      "cmd": {
+        "type": "string",
+        "description": "Command to execute (POSIX shell syntax)",
+        "contentMediaType": "text/x-sh"
+      },
+      "dir": {
+        "type": "string",
+        "description": "Working directory",
+        "default": ""
+      }
+    }
+  },
+  "start": {
+    "command": "cd \"${DIR:-.}\" && sh \"${CMD_FILE}\""
+  }
+}
