@@ -13,6 +13,10 @@ apps/
   shell/
     linux/app.config.v1.json
     windows/app.config.v1.json
+  apt/
+    linux/app.config.v1.json
+    linux/install-apt.sh
+    linux/start-apt.sh
 internal/                shared Go helpers and validation
 go.mod
 .github/workflows/       CI and release publishing
@@ -25,7 +29,7 @@ Each platform directory contains `app.config.v1.json` — the filename `orc-arti
 | App | Status | Notes |
 |-----|--------|-------|
 | shell | draft | Arbitrary command via `CMD_FILE`; linux + windows (multi-platform index) |
-| apt | planned | |
+| apt | draft | Debian/Ubuntu packages via apt-get; linux/amd64 only |
 | cppdevtools | planned | |
 | uv | planned | |
 | github-runner | planned | |
@@ -41,7 +45,9 @@ make test      # validate all app.config.v1.json blobs
 make tidy      # refresh go.sum
 ```
 
-### Publish shell locally (after orc-artifact login)
+### Publish locally (after orc-artifact login)
+
+**shell**
 
 Multi-platform (linux amd64 + windows amd64):
 
@@ -56,7 +62,13 @@ orc-artifact push ghcr.io/admte/shell:1.0.0,default \
   apps/shell/linux/app.config.v1.json
 ```
 
-Release tags use `<app>/<version>`, for example `shell/1.0.0`.
+**apt**
+
+```bash
+make push-apt
+```
+
+Release tags use `<app>/<version>`, for example `shell/1.0.0` or `apt/1.0.0`.
 
 ## Related repos
 

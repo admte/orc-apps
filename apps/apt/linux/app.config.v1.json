@@ -1,0 +1,19 @@
+{
+  "description": "Install Debian/Ubuntu packages via apt-get",
+  "params": {
+    "type": "object",
+    "required": ["packages"],
+    "properties": {
+      "packages": {
+        "type": "string",
+        "description": "Space-separated package names (e.g. git curl htop)"
+      }
+    }
+  },
+  "install": {
+    "command": "sh install-apt.sh"
+  },
+  "start": {
+    "command": "sh start-apt.sh"
+  }
+}
