@@ -1,0 +1,34 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: shell
+  # org.opencontainers.image.version: 1.0.1   # optional; omitted -> tag "default"
+  org.opencontainers.image.description: Run an arbitrary shell command
+config:
+  description: Run an arbitrary shell command
+  params:
+    type: object
+    required: []
+    properties:
+      cmd:
+        type: string
+        description: "{cmdDescription}"
+        contentMediaType: "{cmdMediaType}"
+      dir:
+        type: string
+        description: Working directory
+        default: ""
+  start:
+    command: "{startCommand}"
+platforms:
+  - os: linux
+    arch: amd64
+    vars:
+      cmdDescription: Command to execute (POSIX shell syntax)
+      cmdMediaType: text/x-sh
+      startCommand: 'cd "${DIR:-.}" && sh "${CMD_FILE:-/dev/null}"'
+  - os: windows
+    arch: amd64
+    vars:
+      cmdDescription: Command to execute (cmd.exe syntax)
+      cmdMediaType: text/plain
+      startCommand: 'powershell -NoProfile -ExecutionPolicy Bypass -Command "if ($env:DIR) { Set-Location -LiteralPath $env:DIR }; if ($env:CMD_FILE) { cmd.exe /c (Get-Content -Raw -LiteralPath $env:CMD_FILE) }"'

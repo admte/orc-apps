@@ -1,4 +1,3 @@
 /Build/
-go.work
-go.work.sum
+/orc
 .DS_Store
