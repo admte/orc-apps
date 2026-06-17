@@ -4,7 +4,6 @@ annotations:
   # org.opencontainers.image.version: 1.0.1   # optional; omitted -> tag "default"
   org.opencontainers.image.description: Run an arbitrary shell command
 config:
-  description: Run an arbitrary shell command
   params:
     type: object
     required: []
