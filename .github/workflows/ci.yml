@@ -19,8 +19,6 @@ jobs:
         run: ./scripts/install.sh
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          # Pin the recipe-embedding release so artifacts round-trip via `orc clone`.
-          ORC_VERSION: v0.5.0
       - name: Build every app (validates artifact.yaml + config schema)
         run: |
           for dir in apps/*/; do

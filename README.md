@@ -97,7 +97,7 @@ low-level, one-platform extract.
 
 - **PRs / pushes:** every `apps/*/` is built to validate `artifact.yaml` and the config schema,
   then the embedded recipe referrer is checked to be byte-identical to the source `artifact.yaml`
-  (the `orc clone` round-trip). CI pins the orc CLI to `v0.5.0` (`ORC_VERSION`).
+  (the `orc clone` round-trip). CI installs the latest orc release.
 - **Release:** push a tag `<app>/<version>` (e.g. `shell/1.0.1`) to build and push that app to
   `ghcr.io/admte/<app>:<version>,default`.
 
