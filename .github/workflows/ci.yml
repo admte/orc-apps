@@ -19,6 +19,8 @@ jobs:
         run: ./scripts/install.sh
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          # Pin the recipe-embedding release so artifacts round-trip via `orc clone`.
+          ORC_VERSION: v0.5.0
       - name: Build every app (validates artifact.yaml + config schema)
         run: |
           for dir in apps/*/; do
@@ -26,4 +28,17 @@ jobs:
             echo "::group::build $app"
             ./orc build "$dir" --output "/tmp/oci-$app"
             echo "::endgroup::"
+          done
+      - name: Verify embedded recipe round-trips (byte-identical artifact.yaml)
+        run: |
+          for dir in apps/*/; do
+            app=$(basename "$dir")
+            layout="/tmp/oci-$app"
+            ref=$(jq -r '.manifests[] | select(.artifactType=="application/vnd.orc8r.recipe.v1") | .digest' "$layout/index.json")
+            if [ -z "$ref" ]; then echo "::error::$app: no recipe referrer in OCI layout"; exit 1; fi
+            recipe=$(jq -r '.layers[0].digest' "$layout/blobs/sha256/${ref#sha256:}")
+            if ! diff -q "$layout/blobs/sha256/${recipe#sha256:}" "$dir/artifact.yaml" >/dev/null; then
+              echo "::error::$app: embedded recipe is not byte-identical to artifact.yaml"; exit 1
+            fi
+            echo "$app: recipe round-trip OK"
           done
