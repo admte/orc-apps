@@ -15,10 +15,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install orc
-        # orc-cli is a private repo; ORC_CLI_TOKEN is a PAT with read access to admte/orc-cli.
+        # orc-cli is a private repo; GH_TOKEN secret is a PAT with read access to admte/orc-cli.
         run: ./scripts/install.sh
         env:
-          GITHUB_TOKEN: ${{ secrets.ORC_CLI_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
       - name: Build every app (validates artifact.yaml + config schema)
         run: |
           for dir in apps/*/; do
