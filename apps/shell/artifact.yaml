@@ -20,15 +20,29 @@ config:
   start:
     command: "{startCommand}"
 platforms:
+  # POSIX (sh) variant — linux + darwin, any arch. Shared vars via anchor.
   - os: linux
     arch: amd64
-    vars:
+    vars: &posix
       cmdDescription: Command to execute (POSIX shell syntax)
       cmdMediaType: text/x-sh
       startCommand: 'cd "${DIR:-.}" && sh "${CMD_FILE:-/dev/null}"'
+  - os: linux
+    arch: arm64
+    vars: *posix
+  - os: darwin
+    arch: amd64
+    vars: *posix
+  - os: darwin
+    arch: arm64
+    vars: *posix
+  # Windows (powershell) variant.
   - os: windows
     arch: amd64
-    vars:
+    vars: &windows
       cmdDescription: Command to execute (cmd.exe syntax)
       cmdMediaType: text/plain
       startCommand: 'powershell -NoProfile -ExecutionPolicy Bypass -Command "if ($env:DIR) { Set-Location -LiteralPath $env:DIR }; if ($env:CMD_FILE) { cmd.exe /c (Get-Content -Raw -LiteralPath $env:CMD_FILE) }"'
+  - os: windows
+    arch: arm64
+    vars: *windows

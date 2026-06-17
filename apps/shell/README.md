@@ -5,13 +5,13 @@ platform differences (`cmd` media type, `start.command`) come from `platforms[].
 
 ```text
 shell/
-  artifact.yaml    # linux/amd64 + windows/amd64
+  artifact.yaml    # linux + darwin + windows, amd64 + arm64
 ```
 
-| Platform | `cmd` param syntax |
-|----------|-------------------|
-| linux/amd64 | POSIX shell (`text/x-sh`) |
-| windows/amd64 | cmd.exe (`text/plain`) |
+| Platforms | `cmd` param syntax |
+|-----------|-------------------|
+| linux, darwin (amd64/arm64) | POSIX shell (`text/x-sh`) |
+| windows (amd64/arm64) | cmd.exe (`text/plain`) |
 
 Build + push (from the repo root, after `./scripts/install.sh` and `./orc login ghcr.io`):
 
