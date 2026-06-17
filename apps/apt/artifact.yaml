@@ -4,7 +4,6 @@ annotations:
   # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
   org.opencontainers.image.description: Install Debian/Ubuntu packages via apt-get
 config:
-  description: Install Debian/Ubuntu packages via apt-get
   params:
     type: object
     required: [packages]
