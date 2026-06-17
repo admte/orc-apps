@@ -74,9 +74,30 @@ Validate locally without pushing (writes an OCI layout to disk):
 ./orc build ./apps/shell --output /tmp/shell-oci
 ```
 
+## Round-trip (clone)
+
+`orc build` embeds the verbatim `artifact.yaml` as an OCI recipe referrer
+(`application/vnd.orc8r.recipe.v1`) of the published package, so the sources can be
+reconstructed from the registry:
+
+```bash
+# check out an app's sources: artifact.yaml + all-platform payload files
+./orc clone shell ./shell
+# edit, then rebuild/republish from the same tree
+$EDITOR ./shell/artifact.yaml
+./orc build ./shell --push
+```
+
+The recovered `artifact.yaml` is byte-identical to the source. Discovery uses the OCI
+referrers API, falling back to the referrers tag schema (`sha256-<digest>`) on registries
+without it (e.g. `ghcr.io`). Use `orc clone` (not `orc pull`) for editing — `pull` is the
+low-level, one-platform extract.
+
 ## CI
 
-- **PRs / pushes:** every `apps/*/` is built to validate `artifact.yaml` and the config schema.
+- **PRs / pushes:** every `apps/*/` is built to validate `artifact.yaml` and the config schema,
+  then the embedded recipe referrer is checked to be byte-identical to the source `artifact.yaml`
+  (the `orc clone` round-trip). CI pins the orc CLI to `v0.5.0` (`ORC_VERSION`).
 - **Release:** push a tag `<app>/<version>` (e.g. `shell/1.0.1`) to build and push that app to
   `ghcr.io/admte/<app>:<version>,default`.
 
