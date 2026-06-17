@@ -13,7 +13,7 @@ jobs:
     name: Build apps
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install orc
         # orc-cli is a private repo; GH_TOKEN secret is a PAT with read access to admte/orc-cli.
         run: ./scripts/install.sh
