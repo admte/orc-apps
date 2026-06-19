@@ -17,6 +17,13 @@ apps/
     artifact.yaml          # recipe: config + files (install/start scripts)
     install-apt.sh
     start-apt.sh
+  cpp-dev-tools/
+    artifact.yaml          # linux; installs a C++ build toolchain
+    install-cpp-dev-tools.sh
+  uv/
+    artifact.yaml          # linux + darwin + windows; installs uv CLI
+    install-uv-unix.sh
+    install-uv.ps1
 scripts/install.sh         # downloads the orc CLI into ./orc
 .github/workflows/ci.yml   # validate on PR, publish on <app>/<version> tags
 ```
@@ -107,8 +114,8 @@ low-level, one-platform extract.
 |-----|--------|-------|
 | shell | draft | Arbitrary command via `CMD_FILE`; linux + windows (multi-platform index) |
 | apt | draft | Install Debian/Ubuntu packages via `apt-get`; linux only |
-| cppdevtools | planned | |
-| uv | planned | |
+| cpp-dev-tools | draft | C++ toolchain via host Linux package manager |
+| uv | draft | Python package manager uv; linux + darwin + windows |
 | github-runner | planned | |
 | jenkins-agent | planned | |
 | kvm-server | planned | JSON-RPC plugin (spec 031) |
