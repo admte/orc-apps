@@ -1,0 +1,59 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: github-runner
+  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  org.opencontainers.image.description: GitHub Actions self-hosted runner
+config:
+  params:
+    type: object
+    required: [url, token]
+    properties:
+      url:
+        type: string
+        title: Repository URL
+        description: GitHub repository or organization URL to register the runner with
+        placeholder: https://github.com/org/repo
+      token:
+        type: string
+        title: GitHub Token
+        description: GitHub token used to request runner registration and removal tokens
+        sensitive: true
+      labels:
+        type: string
+        title: Labels
+        description: Optional comma-separated runner labels
+        default: ""
+      runner_name:
+        type: string
+        title: Runner Name
+        description: Optional runner name; defaults to the host name
+        default: ""
+      work_dir:
+        type: string
+        title: Work Directory
+        description: Directory where the GitHub runner will be installed
+        default: github-runner
+  install: {}
+  start: {}
+  drain:
+    timeout: 600s
+files:
+  - install-github-runner.sh
+  - start-github-runner.sh
+  - drain-github-runner.sh
+  - install-github-runner.ps1
+  - start-github-runner.ps1
+  - drain-github-runner.ps1
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
+  - os: darwin
+    arch: amd64
+  - os: darwin
+    arch: arm64
+  - os: windows
+    arch: amd64
+  - os: windows
+    arch: arm64

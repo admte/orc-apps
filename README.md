@@ -24,7 +24,11 @@ apps/
     artifact.yaml          # linux + darwin + windows; installs uv CLI
     install-uv-unix.sh
     install-uv.ps1
+  github-runner/
+    artifact.yaml          # GitHub Actions self-hosted runner
+    install/start/remove scripts for unix + windows
 scripts/install.sh         # downloads the orc CLI into ./orc
+scripts/build-and-push-github-runner.sh
 .github/workflows/ci.yml   # validate on PR, publish on <app>/<version> tags
 ```
 
@@ -70,6 +74,7 @@ is the tag (defaulting to `default`). Pass `--tag` to override.
 # or build + push in one step (docker buildx style)
 ./orc build ./apps/shell --push
 ./orc build ./apps/apt   --push
+./scripts/build-and-push-github-runner.sh
 ```
 
 Pin a version with the annotation `org.opencontainers.image.version`, or override at build
@@ -117,7 +122,7 @@ low-level, one-platform extract.
 | cpp-dev-tools | draft | C++ toolchain via host Linux package manager |
 | uv | draft | Python package manager uv; linux + darwin + windows |
 | aws | draft | AWS CLI v2 with optional startup credential configuration |
-| github-runner | planned | |
+| github-runner | draft | GitHub Actions self-hosted runner; linux + darwin + windows |
 | jenkins-agent | planned | |
 | kvm-server | planned | JSON-RPC plugin (spec 031) |
 
