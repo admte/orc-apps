@@ -133,7 +133,7 @@ low-level, one-platform extract.
 | codex | draft | OpenAI Codex CLI with optional API key authentication |
 | cursor | draft | Cursor CLI with optional startup API key |
 | github-runner | draft | GitHub Actions self-hosted runner; linux + darwin + windows |
-| jenkins-agent | planned | |
+| jenkins-agent | draft | Jenkins Swarm agent via systemd; linux only |
 | kvm-server | planned | JSON-RPC plugin (spec 031) |
 
 `pxenode` stays in orc-server.

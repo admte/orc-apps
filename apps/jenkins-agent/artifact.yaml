@@ -1,0 +1,43 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: jenkins-agent
+  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  org.opencontainers.image.description: Jenkins Swarm agent connecting to a Jenkins controller
+config:
+  params:
+    type: object
+    required: [jenkins_url, jenkins_username, jenkins_password]
+    properties:
+      jenkins_url:
+        type: string
+        title: Jenkins URL
+        description: URL of the Jenkins controller
+        placeholder: https://jenkins.example.com
+      jenkins_username:
+        type: string
+        title: Username
+        description: Jenkins username for Swarm agent authentication
+      jenkins_password:
+        type: string
+        title: Password
+        description: Jenkins API token or password
+        sensitive: true
+      labels:
+        type: string
+        title: Labels
+        description: Optional comma-separated Swarm agent labels
+        default: ""
+  install: {}
+  start: {}
+  drain:
+    timeout: 120s
+files:
+  - install-jenkins-agent.sh
+  - start-jenkins-agent.sh
+  - drain-jenkins-agent.sh
+  - run-jenkins-agent.sh
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
