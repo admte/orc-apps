@@ -1,7 +1,7 @@
 #!/bin/sh
-# Download the `orc` CLI from github.com/admte/orc-cli releases into ./orc (repo root).
+# Download the `orc` CLI from github.com/admte/orc-rs releases into ./orc (repo root).
 #
-# orc-cli is a PRIVATE repo, so a GitHub token with `repo` scope is required:
+# orc-rs is a PRIVATE repo, so a GitHub token with `repo` scope is required:
 #   export GITHUB_TOKEN=$(gh auth token)     # or a PAT
 #
 # Usage:
@@ -9,7 +9,7 @@
 #   ORC_VERSION=v0.3.0 ./scripts/install.sh   # specific tag
 set -eu
 
-REPO="admte/orc-cli"
+REPO="admte/orc-rs"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 DEST="$ROOT_DIR/orc"
@@ -52,10 +52,32 @@ fi
 version="${ORC_VERSION:-}"
 if [ -n "$version" ]; then
 	rel_url="https://api.github.com/repos/$REPO/releases/tags/$version"
+	release_json=$(api_get "$rel_url")
 else
-	rel_url="https://api.github.com/repos/$REPO/releases/latest"
+	# `releases/latest` excludes prereleases. The current CLI is released as a
+	# release candidate, so select the newest non-draft release with this
+	# platform's CLI asset instead.
+	rel_url="https://api.github.com/repos/$REPO/releases?per_page=100"
+	releases_json=$(api_get "$rel_url")
+	if command -v jq >/dev/null 2>&1; then
+		release_json=$(printf '%s' "$releases_json" | jq -ce --arg asset "$asset" \
+			'[.[] | select(.draft | not) | select(any(.assets[]?; .name == $asset))][0]') || {
+			echo "no release in $REPO contains $asset" >&2
+			exit 1
+		}
+	else
+		release_json=$(printf '%s' "$releases_json" | python3 -c '
+import json, sys
+asset = sys.argv[1]
+for release in json.load(sys.stdin):
+    if not release.get("draft") and any(item.get("name") == asset for item in release.get("assets", [])):
+        print(json.dumps(release))
+        break
+else:
+    raise SystemExit(f"no release contains {asset}")
+' "$asset") || exit 1
+	fi
 fi
-release_json=$(api_get "$rel_url")
 if command -v jq >/dev/null 2>&1; then
 	version=$(printf '%s' "$release_json" | json_field '.tag_name')
 	asset_id=$(printf '%s' "$release_json" | json_field ".assets[]|select(.name==\"$asset\").id")
