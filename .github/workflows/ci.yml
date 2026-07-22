@@ -11,7 +11,7 @@ permissions:
 jobs:
   build:
     name: Build apps
-    runs-on: ubuntu-latest
+    runs-on: precision32c16m
     steps:
       - uses: actions/checkout@v5
       - name: Install orc
