@@ -122,6 +122,7 @@ low-level, one-platform extract.
 | cpp-dev-tools | draft | C++ toolchain via host Linux package manager |
 | uv | draft | Python package manager uv; linux + darwin + windows |
 | aws | draft | AWS CLI v2 with optional startup credential configuration |
+| vault | draft | HashiCorp Vault CLI with optional AppRole authentication |
 | github-runner | draft | GitHub Actions self-hosted runner; linux + darwin + windows |
 | jenkins-agent | planned | |
 | kvm-server | planned | JSON-RPC plugin (spec 031) |
