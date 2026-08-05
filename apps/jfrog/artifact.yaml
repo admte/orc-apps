@@ -1,0 +1,54 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: jfrog
+  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  org.opencontainers.image.description: Install and configure JFrog CLI
+config:
+  params:
+    type: object
+    required: [jfrog_url, jfrog_user, jfrog_token]
+    properties:
+      jfrog_url:
+        type: string
+        title: JFrog URL
+        description: JFrog Platform base URL
+        placeholder: https://example.jfrog.io
+      jfrog_user:
+        type: string
+        title: JFrog user
+        description: JFrog username
+      jfrog_token:
+        type: string
+        title: JFrog access token
+        description: JFrog access token used for authentication
+        sensitive: true
+        lifetime: startup
+  install:
+    command: "{installCommand}"
+  start:
+    command: "{startCommand}"
+files:
+  - install-jfrog.sh
+  - start-jfrog.sh
+  - install-jfrog.ps1
+  - start-jfrog.ps1
+platforms:
+  - os: linux
+    arch: amd64
+    vars: &unix
+      installCommand: sh install-jfrog.sh
+      startCommand: sh start-jfrog.sh
+  - os: linux
+    arch: arm64
+    vars: *unix
+  - os: darwin
+    arch: amd64
+    vars: *unix
+  - os: darwin
+    arch: arm64
+    vars: *unix
+  - os: windows
+    arch: amd64
+    vars:
+      installCommand: powershell -NoProfile -ExecutionPolicy Bypass -File install-jfrog.ps1
+      startCommand: powershell -NoProfile -ExecutionPolicy Bypass -File start-jfrog.ps1
