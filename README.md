@@ -20,6 +20,9 @@ apps/
   cpp-dev-tools/
     artifact.yaml          # linux; installs a C++ build toolchain
     install-cpp-dev-tools.sh
+  docker/
+    artifact.yaml          # linux; installs the Docker engine (install-only)
+    install-docker.sh
   uv/
     artifact.yaml          # linux + darwin + windows; installs uv CLI
     install-uv-unix.sh
@@ -120,6 +123,7 @@ low-level, one-platform extract.
 | shell | draft | Arbitrary command via `CMD_FILE`; linux + windows (multi-platform index) |
 | apt | draft | Install Debian/Ubuntu packages via `apt-get`; linux only |
 | cpp-dev-tools | draft | C++ toolchain via host Linux package manager |
+| docker | draft | Docker engine via Docker's apt repo; install-only; linux only |
 | uv | draft | Python package manager uv; linux + darwin + windows |
 | aws | draft | AWS CLI v2 with optional startup credential configuration |
 | vault | draft | HashiCorp Vault CLI with optional AppRole authentication |
