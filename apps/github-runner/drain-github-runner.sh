@@ -1,9 +1,15 @@
 #!/bin/sh
 set -eu
 
+SERVICE_USER=${SERVICE_USER:-ghrunner}
+
 fail() {
 	echo "github-runner drain: $*" >&2
 	exit 1
+}
+
+shell_quote() {
+	printf '%s' "$1" | sed "s/'/'\\\\''/g; s/^/'/; s/\$/'/"
 }
 
 json_field() {
@@ -48,6 +54,7 @@ if [ ! -x "$work_dir/config.sh" ]; then
 	echo "github-runner drain: $work_dir/config.sh not found; nothing to remove" >&2
 	exit 0
 fi
+work_dir=$(CDPATH= cd -- "$work_dir" && pwd)
 
 github_token=$(token_value)
 api_path=$(github_api_path)
@@ -58,4 +65,13 @@ remove_json=$(curl -fsSL -X POST \
 remove_token=$(printf '%s' "$remove_json" | json_field token)
 [ -n "$remove_token" ] || fail "failed to create remove token"
 
-(cd "$work_dir" && ./config.sh remove --token "$remove_token")
+remove_cmd="cd $(shell_quote "$work_dir") && ./config.sh remove --token $(shell_quote "$remove_token")"
+
+# config.sh refuses to run as root; unregister as the account that owns the
+# runner directory, matching install.
+if [ "$(id -u)" -eq 0 ] && id "$SERVICE_USER" >/dev/null 2>&1; then
+	su -s /bin/sh "$SERVICE_USER" \
+		-c "HOME=$(shell_quote "$work_dir"); export HOME; $remove_cmd"
+else
+	sh -c "$remove_cmd"
+fi
