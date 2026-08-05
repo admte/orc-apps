@@ -6,21 +6,21 @@ annotations:
 config:
   params:
     type: object
-    required: [jfrog_url, jfrog_user, jfrog_token]
+    required: []
     properties:
       jfrog_url:
         type: string
         title: JFrog URL
-        description: JFrog Platform base URL
+        description: Optional JFrog Platform base URL
         placeholder: https://example.jfrog.io
       jfrog_user:
         type: string
         title: JFrog user
-        description: JFrog username
+        description: Optional JFrog username
       jfrog_token:
         type: string
         title: JFrog access token
-        description: JFrog access token used for authentication
+        description: Optional JFrog access token used for authentication
         sensitive: true
         lifetime: startup
   install:

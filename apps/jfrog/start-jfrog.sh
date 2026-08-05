@@ -10,10 +10,8 @@ read_token() {
 	if [ -n "${JFROG_TOKEN_FILE:-}" ]; then
 		[ -r "$JFROG_TOKEN_FILE" ] || fail "JFROG_TOKEN_FILE is not readable"
 		tr -d '\r\n' <"$JFROG_TOKEN_FILE"
-	elif [ -n "${JFROG_TOKEN:-}" ]; then
-		printf '%s' "$JFROG_TOKEN"
 	else
-		fail "jfrog_token is required"
+		printf '%s' "${JFROG_TOKEN:-}"
 	fi
 }
 
@@ -27,10 +25,18 @@ else
 	fail "JFrog CLI is not installed"
 fi
 
-[ -n "${JFROG_URL:-}" ] || fail "jfrog_url is required"
-[ -n "${JFROG_USER:-}" ] || fail "jfrog_user is required"
+"$jf_bin" --version >/dev/null
+
+# Credentials are optional: with none supplied the app's job is done once the
+# CLI is installed and runnable. Configuring a server needs all three together.
 token=$(read_token)
-[ -n "$token" ] || fail "jfrog_token is empty"
+if [ -z "${JFROG_URL:-}" ] && [ -z "${JFROG_USER:-}" ] && [ -z "$token" ]; then
+	echo "JFrog CLI is ready; credentials were not provided" >&2
+	exit 0
+fi
+[ -n "${JFROG_URL:-}" ] || fail "jfrog_url is required to configure a server"
+[ -n "${JFROG_USER:-}" ] || fail "jfrog_user is required to configure a server"
+[ -n "$token" ] || fail "jfrog_token is required to configure a server"
 
 umask 077
 echo "Configuring JFrog CLI server 'orc'" >&2
