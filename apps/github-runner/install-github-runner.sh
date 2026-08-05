@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+SERVICE_USER=${SERVICE_USER:-ghrunner}
+
 fail() {
 	echo "github-runner install: $*" >&2
 	exit 1
@@ -8,6 +10,28 @@ fail() {
 
 need() {
 	command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
+}
+
+# The Actions runner refuses to configure or run as root ("Must not run with
+# sudo"), but lifecycle phases execute as root. Register a dedicated service
+# account and drop to it for every runner invocation.
+ensure_service_user() {
+	if id "$SERVICE_USER" >/dev/null 2>&1; then
+		return 0
+	fi
+	need useradd
+	useradd -r -U -M -s /usr/sbin/nologin "$SERVICE_USER"
+	id "$SERVICE_USER" >/dev/null 2>&1 || fail "failed to create service user $SERVICE_USER"
+}
+
+# The service account is created without a home directory, so point HOME at the
+# runner directory it owns; the runner writes dotfiles relative to HOME.
+as_service_user() {
+	su -s /bin/sh "$SERVICE_USER" -c "HOME=$(shell_quote "$work_dir"); export HOME; $1"
+}
+
+shell_quote() {
+	printf '%s' "$1" | sed "s/'/'\\\\''/g; s/^/'/; s/\$/'/"
 }
 
 json_field() {
@@ -70,7 +94,11 @@ work_dir=${WORK_DIR:-github-runner}
 runner_name=${RUNNER_NAME:-$(hostname)}
 labels=${LABELS:-}
 
+[ "$(id -u)" -eq 0 ] || fail "must run as root"
+ensure_service_user
+
 mkdir -p "$work_dir"
+work_dir=$(CDPATH= cd -- "$work_dir" && pwd)
 
 latest_json=$(curl -fsSL -H "Accept: application/vnd.github+json" \
 	"https://api.github.com/repos/actions/runner/releases/latest")
@@ -86,6 +114,7 @@ trap 'rm -rf "$tmp"' EXIT
 echo "Downloading GitHub Actions runner $version ($archive)" >&2
 curl -fsSL "$url" -o "$tmp/$archive"
 tar -xzf "$tmp/$archive" -C "$work_dir"
+chown -R "$SERVICE_USER:$SERVICE_USER" "$work_dir"
 
 registration_json=$(curl -fsSL -X POST \
 	-H "Accept: application/vnd.github+json" \
@@ -99,4 +128,10 @@ if [ -n "$labels" ]; then
 	set -- "$@" --labels "$labels"
 fi
 
-(cd "$work_dir" && ./config.sh "$@")
+config_cmd="cd $(shell_quote "$work_dir") && ./config.sh"
+for arg in "$@"; do
+	config_cmd="$config_cmd $(shell_quote "$arg")"
+done
+
+echo "Configuring runner as $SERVICE_USER" >&2
+as_service_user "$config_cmd"
