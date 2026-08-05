@@ -10,6 +10,30 @@ need() {
 	command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
 }
 
+# Cloud images routinely ship without unzip, which the Vault release archive
+# needs. Install it from the host package manager rather than failing, so a
+# stock image works unattended.
+ensure_unzip() {
+	command -v unzip >/dev/null 2>&1 && return 0
+	[ "$(id -u)" -eq 0 ] || fail "unzip is required and installing it needs root"
+	echo "Installing unzip" >&2
+	if command -v apt-get >/dev/null 2>&1; then
+		DEBIAN_FRONTEND=noninteractive apt-get update -qq
+		DEBIAN_FRONTEND=noninteractive apt-get install -y -qq unzip
+	elif command -v dnf >/dev/null 2>&1; then
+		dnf install -y -q unzip
+	elif command -v yum >/dev/null 2>&1; then
+		yum install -y -q unzip
+	elif command -v zypper >/dev/null 2>&1; then
+		zypper --non-interactive --quiet install unzip
+	elif command -v apk >/dev/null 2>&1; then
+		apk add --no-progress --quiet unzip
+	else
+		fail "unzip is required and no supported package manager was found"
+	fi
+	command -v unzip >/dev/null 2>&1 || fail "unzip installation failed"
+}
+
 case "$(uname -s)" in
 Linux) os=linux ;;
 Darwin) os=darwin ;;
@@ -23,8 +47,8 @@ aarch64 | arm64) arch=arm64 ;;
 esac
 
 need curl
-need unzip
 need mktemp
+ensure_unzip
 
 if [ -z "${VAULT_VERSION:-}" ] && command -v vault >/dev/null 2>&1; then
 	vault version
