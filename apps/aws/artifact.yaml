@@ -21,10 +21,11 @@ config:
         sensitive: true
         lifetime: startup
   versions:
-    source: github_releases
+    # aws/aws-cli tags every release but publishes no GitHub releases,
+    # so tags are the only enumerable source.
+    source: github_tags
     url: https://github.com/aws/aws-cli
     filter:
-      prerelease: false
       pattern: "^2\\.[0-9.]+$"
       limit: 30
   install:
