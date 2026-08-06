@@ -25,6 +25,13 @@ config:
         description: Optional AppRole secret ID for roles that require it
         sensitive: true
         lifetime: startup
+  versions:
+    source: github_releases
+    url: https://github.com/hashicorp/vault
+    filter:
+      prerelease: false
+      pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+      limit: 30
   install:
     command: "{installCommand}"
   start:

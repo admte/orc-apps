@@ -34,7 +34,7 @@ ensure_unzip() {
 	command -v unzip >/dev/null 2>&1 || fail "unzip installation failed"
 }
 
-if command -v aws >/dev/null 2>&1 && [ -z "${AWS_CLI_FORCE_INSTALL:-}" ]; then
+if command -v aws >/dev/null 2>&1 && [ -z "${APP_VERSION:-}" ] && [ -z "${AWS_CLI_FORCE_INSTALL:-}" ]; then
 	aws --version
 	exit 0
 fi
@@ -52,8 +52,13 @@ Linux)
 	*) fail "unsupported architecture: $(uname -m)" ;;
 	esac
 
+	if [ -n "${APP_VERSION:-}" ]; then
+		zip="awscli-exe-linux-$arch-$APP_VERSION.zip"
+	else
+		zip="awscli-exe-linux-$arch.zip"
+	fi
 	echo "Downloading AWS CLI v2 for linux/$arch" >&2
-	curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$arch.zip" \
+	curl -fsSL "https://awscli.amazonaws.com/$zip" \
 		-o "$tmp/awscliv2.zip"
 	unzip -q "$tmp/awscliv2.zip" -d "$tmp"
 
@@ -68,8 +73,13 @@ Linux)
 	;;
 Darwin)
 	[ "$(id -u)" -eq 0 ] || fail "macOS installation requires root privileges"
+	if [ -n "${APP_VERSION:-}" ]; then
+		pkg="AWSCLIV2-$APP_VERSION.pkg"
+	else
+		pkg="AWSCLIV2.pkg"
+	fi
 	echo "Downloading AWS CLI v2 for macOS" >&2
-	curl -fsSL https://awscli.amazonaws.com/AWSCLIV2.pkg -o "$tmp/AWSCLIV2.pkg"
+	curl -fsSL "https://awscli.amazonaws.com/$pkg" -o "$tmp/AWSCLIV2.pkg"
 	installer -pkg "$tmp/AWSCLIV2.pkg" -target /
 	/usr/local/bin/aws --version
 	;;

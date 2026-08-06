@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-if (-not $env:VAULT_VERSION -and (Get-Command vault -ErrorAction SilentlyContinue)) {
+if (-not $env:APP_VERSION -and -not $env:VAULT_VERSION -and (Get-Command vault -ErrorAction SilentlyContinue)) {
     vault version
     exit 0
 }
@@ -10,7 +10,7 @@ $architecture = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSA
     default { throw "vault install: unsupported architecture: $_" }
 }
 
-$version = $env:VAULT_VERSION
+$version = if ($env:APP_VERSION) { $env:APP_VERSION } else { $env:VAULT_VERSION }
 if (-not $version) {
     $release = Invoke-RestMethod -Uri "https://api.releases.hashicorp.com/v1/releases/vault/latest"
     $version = $release.version
