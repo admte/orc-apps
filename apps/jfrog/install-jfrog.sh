@@ -6,7 +6,7 @@ fail() {
 	exit 1
 }
 
-if command -v jf >/dev/null 2>&1 && [ -z "${JFROG_CLI_FORCE_INSTALL:-}" ]; then
+if command -v jf >/dev/null 2>&1 && [ -z "${APP_VERSION:-}" ] && [ -z "${JFROG_CLI_FORCE_INSTALL:-}" ]; then
 	jf --version
 	exit 0
 fi
@@ -34,7 +34,7 @@ Darwin)
 	;;
 esac
 
-version=${JFROG_CLI_VERSION:-'[RELEASE]'}
+version=${APP_VERSION:-${JFROG_CLI_VERSION:-'[RELEASE]'}}
 url="https://releases.jfrog.io/artifactory/jfrog-cli/v2-jf/$version/jfrog-cli-$os-$arch/jf"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM

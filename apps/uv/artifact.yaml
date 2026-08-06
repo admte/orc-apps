@@ -4,6 +4,13 @@ annotations:
   # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
   org.opencontainers.image.description: Install the uv Python package manager
 config:
+  versions:
+    source: github_releases
+    url: https://github.com/astral-sh/uv
+    filter:
+      prerelease: false
+      pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+      limit: 30
   install:
     command: "{installCommand}"
 files:

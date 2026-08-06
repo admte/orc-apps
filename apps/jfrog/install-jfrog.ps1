@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 $existing = Get-Command jf -ErrorAction SilentlyContinue
-if ($existing -and -not $env:JFROG_CLI_FORCE_INSTALL) {
+if ($existing -and -not $env:APP_VERSION -and -not $env:JFROG_CLI_FORCE_INSTALL) {
 	& $existing.Source --version
 	exit 0
 }
@@ -9,7 +9,7 @@ if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
 	throw "jfrog install: unsupported architecture $env:PROCESSOR_ARCHITECTURE"
 }
 
-$version = if ($env:JFROG_CLI_VERSION) { $env:JFROG_CLI_VERSION } else { '[RELEASE]' }
+$version = if ($env:APP_VERSION) { $env:APP_VERSION } elseif ($env:JFROG_CLI_VERSION) { $env:JFROG_CLI_VERSION } else { '[RELEASE]' }
 $url = "https://releases.jfrog.io/artifactory/jfrog-cli/v2-jf/$version/jfrog-cli-windows-amd64/jf.exe"
 $installDir = if ($env:JFROG_CLI_INSTALL_DIR) {
 	$env:JFROG_CLI_INSTALL_DIR

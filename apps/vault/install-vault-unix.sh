@@ -50,12 +50,12 @@ need curl
 need mktemp
 ensure_unzip
 
-if [ -z "${VAULT_VERSION:-}" ] && command -v vault >/dev/null 2>&1; then
+if [ -z "${APP_VERSION:-}" ] && [ -z "${VAULT_VERSION:-}" ] && command -v vault >/dev/null 2>&1; then
 	vault version
 	exit 0
 fi
 
-version=${VAULT_VERSION:-}
+version=${APP_VERSION:-${VAULT_VERSION:-}}
 if [ -z "$version" ]; then
 	release=$(curl -fsSL https://api.releases.hashicorp.com/v1/releases/vault/latest) ||
 		fail "could not determine the latest Vault version"

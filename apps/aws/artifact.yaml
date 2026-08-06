@@ -20,6 +20,13 @@ config:
         description: Optional AWS secret access key
         sensitive: true
         lifetime: startup
+  versions:
+    source: github_releases
+    url: https://github.com/aws/aws-cli
+    filter:
+      prerelease: false
+      pattern: "^2\\.[0-9.]+$"
+      limit: 30
   install:
     command: "{installCommand}"
   start:

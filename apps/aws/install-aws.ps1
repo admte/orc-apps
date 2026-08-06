@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 $existing = Get-Command aws -ErrorAction SilentlyContinue
-if ($existing -and -not $env:AWS_CLI_FORCE_INSTALL) {
+if ($existing -and -not $env:APP_VERSION -and -not $env:AWS_CLI_FORCE_INSTALL) {
 	& $existing.Source --version
 	exit 0
 }
@@ -14,8 +14,13 @@ $tmp = Join-Path ([System.IO.Path]::GetTempPath()) "aws-cli-$([guid]::NewGuid())
 try {
 	New-Item -ItemType Directory -Path $tmp -Force | Out-Null
 	$msi = Join-Path $tmp 'AWSCLIV2.msi'
+	$msiUrl = if ($env:APP_VERSION) {
+		"https://awscli.amazonaws.com/AWSCLIV2-$($env:APP_VERSION).msi"
+	} else {
+		'https://awscli.amazonaws.com/AWSCLIV2.msi'
+	}
 	Write-Host 'Downloading AWS CLI v2 for windows/amd64'
-	Invoke-WebRequest -UseBasicParsing -Uri 'https://awscli.amazonaws.com/AWSCLIV2.msi' -OutFile $msi
+	Invoke-WebRequest -UseBasicParsing -Uri $msiUrl -OutFile $msi
 
 	$process = Start-Process msiexec.exe -ArgumentList @('/i', "`"$msi`"", '/qn', '/norestart') `
 		-Wait -PassThru
