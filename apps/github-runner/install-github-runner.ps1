@@ -44,17 +44,31 @@ $labels = if ($env:LABELS) { $env:LABELS } else { '' }
 
 New-Item -ItemType Directory -Force -Path $workDir | Out-Null
 
-$latest = Invoke-RestMethod -Headers @{ Accept = 'application/vnd.github+json' } `
-	-Uri 'https://api.github.com/repos/actions/runner/releases/latest'
-$version = $latest.tag_name.TrimStart('v')
-$archive = "actions-runner-win-$(Get-RunnerArch)-$version.zip"
-$url = "https://github.com/actions/runner/releases/download/v$version/$archive"
+# Ask GitHub which runner build its service currently wants for this
+# registration target; the runner self-updates afterward, so no pinning.
+$downloads = Invoke-RestMethod -Headers @{
+	Accept        = 'application/vnd.github+json'
+	Authorization = "token $githubToken"
+} -Uri "https://api.github.com/$apiPath/actions/runners/downloads"
+$arch = Get-RunnerArch
+$selected = $downloads | Where-Object { $_.os -eq 'win' -and $_.architecture -eq $arch } | Select-Object -First 1
+if (-not $selected) { throw "no runner download for win/$arch" }
+$archive = $selected.filename
 $tmp = New-Item -ItemType Directory -Force -Path (Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString()))
 
 try {
 	$zip = Join-Path $tmp.FullName $archive
-	Write-Host "Downloading GitHub Actions runner $version ($archive)"
-	Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zip
+	Write-Host "Downloading GitHub Actions runner ($archive)"
+	Invoke-WebRequest -UseBasicParsing -Uri $selected.download_url -OutFile $zip
+	if ($selected.sha256_checksum) {
+		$actual = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash.ToLowerInvariant()
+		if ($actual -ne $selected.sha256_checksum.ToLowerInvariant()) {
+			throw "checksum mismatch for ${archive}: expected $($selected.sha256_checksum), got $actual"
+		}
+		Write-Host 'Checksum verified'
+	} else {
+		Write-Host "GitHub did not publish a checksum for $archive; skipping verification"
+	}
 	Expand-Archive -Force -Path $zip -DestinationPath $workDir
 } finally {
 	Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

@@ -38,6 +38,21 @@ json_field() {
 	python3 -c 'import json,sys; print(json.load(sys.stdin).get(sys.argv[1], ""))' "$1"
 }
 
+# Selects the runner build GitHub's service wants for this target from the
+# runner-downloads API response: prints "download_url filename sha256_checksum".
+select_download() {
+	python3 -c '
+import json, sys
+target_os, target_arch = sys.argv[1], sys.argv[2]
+for entry in json.load(sys.stdin):
+    if entry.get("os") == target_os and entry.get("architecture") == target_arch:
+        print(entry.get("download_url", ""))
+        print(entry.get("filename", ""))
+        print(entry.get("sha256_checksum", ""))
+        break
+' "$1" "$2"
+}
+
 token_value() {
 	if [ -n "${TOKEN_FILE:-}" ]; then
 		tr -d '\r\n' <"$TOKEN_FILE"
@@ -100,19 +115,35 @@ ensure_service_user
 mkdir -p "$work_dir"
 work_dir=$(CDPATH= cd -- "$work_dir" && pwd)
 
-latest_json=$(curl -fsSL -H "Accept: application/vnd.github+json" \
-	"https://api.github.com/repos/actions/runner/releases/latest")
-version=$(printf '%s' "$latest_json" | json_field tag_name)
-version=${version#v}
-[ -n "$version" ] || fail "failed to determine latest runner version"
+# Ask GitHub which runner build its service currently wants for this
+# registration target (authenticated: 5000 req/h vs 60 unauthenticated).
+# The runner self-updates afterward, so no version pinning here.
+downloads_json=$(curl -fsSL \
+	-H "Accept: application/vnd.github+json" \
+	-H "Authorization: token $github_token" \
+	"https://api.github.com/$api_path/actions/runners/downloads") ||
+	fail "failed to list runner downloads"
+selected=$(printf '%s' "$downloads_json" | select_download "$(runner_os)" "$(runner_arch)")
+url=$(printf '%s\n' "$selected" | sed -n 1p)
+archive=$(printf '%s\n' "$selected" | sed -n 2p)
+checksum=$(printf '%s\n' "$selected" | sed -n 3p)
+[ -n "$url" ] && [ -n "$archive" ] ||
+	fail "no runner download for $(runner_os)/$(runner_arch)"
 
-archive="actions-runner-$(runner_os)-$(runner_arch)-$version.tar.gz"
-url="https://github.com/actions/runner/releases/download/v$version/$archive"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-echo "Downloading GitHub Actions runner $version ($archive)" >&2
+echo "Downloading GitHub Actions runner ($archive)" >&2
 curl -fsSL "$url" -o "$tmp/$archive"
+if [ -n "$checksum" ]; then
+	need sha256sum
+	actual=$(sha256sum "$tmp/$archive" | awk '{ print $1 }')
+	[ "$actual" = "$checksum" ] ||
+		fail "checksum mismatch for $archive: expected $checksum, got $actual"
+	echo "Checksum verified" >&2
+else
+	echo "GitHub did not publish a checksum for $archive; skipping verification" >&2
+fi
 tar -xzf "$tmp/$archive" -C "$work_dir"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$work_dir"
 
