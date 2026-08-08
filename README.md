@@ -128,6 +128,7 @@ low-level, one-platform extract.
 | aws | draft | AWS CLI v2 with optional startup credential configuration |
 | vault | draft | HashiCorp Vault CLI with optional AppRole authentication |
 | jfrog | draft | JFrog CLI with optional startup server configuration |
+| gcloud | draft | Google Cloud CLI with optional service account activation |
 | github-runner | draft | GitHub Actions self-hosted runner; linux + darwin + windows |
 | jenkins-agent | planned | |
 | kvm-server | planned | JSON-RPC plugin (spec 031) |
