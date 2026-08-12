@@ -1,0 +1,48 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: cursor
+  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  org.opencontainers.image.description: Install and run Cursor CLI
+config:
+  params:
+    type: object
+    required: []
+    properties:
+      cursor_api_key:
+        type: string
+        title: Cursor API key
+        description: Optional API key used by Cursor CLI
+        sensitive: true
+        lifetime: startup
+  install:
+    command: "{installCommand}"
+  start:
+    command: "{startCommand}"
+files:
+  - install-cursor.sh
+  - start-cursor.sh
+  - install-cursor.ps1
+  - start-cursor.ps1
+platforms:
+  - os: linux
+    arch: amd64
+    vars: &unix
+      installCommand: sh install-cursor.sh
+      startCommand: sh start-cursor.sh
+  - os: linux
+    arch: arm64
+    vars: *unix
+  - os: darwin
+    arch: amd64
+    vars: *unix
+  - os: darwin
+    arch: arm64
+    vars: *unix
+  - os: windows
+    arch: amd64
+    vars: &windows
+      installCommand: powershell -NoProfile -ExecutionPolicy Bypass -File install-cursor.ps1
+      startCommand: powershell -NoProfile -ExecutionPolicy Bypass -File start-cursor.ps1
+  - os: windows
+    arch: arm64
+    vars: *windows
