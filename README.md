@@ -130,6 +130,7 @@ low-level, one-platform extract.
 | jfrog | draft | JFrog CLI with optional startup server configuration |
 | gcloud | draft | Google Cloud CLI with optional service account activation |
 | claude | draft | Claude Code with optional Anthropic API key configuration |
+| codex | draft | OpenAI Codex CLI with optional API key authentication |
 | github-runner | draft | GitHub Actions self-hosted runner; linux + darwin + windows |
 | jenkins-agent | planned | |
 | kvm-server | planned | JSON-RPC plugin (spec 031) |

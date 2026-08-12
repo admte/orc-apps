@@ -1,0 +1,55 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: codex
+  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  org.opencontainers.image.description: Install and configure OpenAI Codex CLI
+config:
+  params:
+    type: object
+    required: []
+    properties:
+      openai_api_key:
+        type: string
+        title: OpenAI API key
+        description: Optional API key used by Codex CLI
+        sensitive: true
+        lifetime: startup
+  versions:
+    source: github_releases
+    url: https://github.com/openai/codex
+    filter:
+      prerelease: false
+      pattern: "^(rust-v)?[0-9]+\\.[0-9]+\\.[0-9]+$"
+      limit: 30
+  install:
+    command: "{installCommand}"
+  start:
+    command: "{startCommand}"
+files:
+  - install-codex.sh
+  - start-codex.sh
+  - install-codex.ps1
+  - start-codex.ps1
+platforms:
+  - os: linux
+    arch: amd64
+    vars: &unix
+      installCommand: sh install-codex.sh
+      startCommand: sh start-codex.sh
+  - os: linux
+    arch: arm64
+    vars: *unix
+  - os: darwin
+    arch: amd64
+    vars: *unix
+  - os: darwin
+    arch: arm64
+    vars: *unix
+  - os: windows
+    arch: amd64
+    vars: &windows
+      installCommand: powershell -NoProfile -ExecutionPolicy Bypass -File install-codex.ps1
+      startCommand: powershell -NoProfile -ExecutionPolicy Bypass -File start-codex.ps1
+  - os: windows
+    arch: arm64
+    vars: *windows
