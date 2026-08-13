@@ -6,10 +6,16 @@ fail() {
 	exit 1
 }
 
+# The installed `agent` command is a wrapper script that dereferences HOME;
+# agent-run phases execute without one, so pin it to the install prefix.
+export HOME=${HOME:-${CURSOR_INSTALL_HOME:-/opt/cursor}}
+
 if [ -n "${CURSOR_AGENT_BIN:-}" ] && [ -x "$CURSOR_AGENT_BIN" ]; then
 	agent_bin=$CURSOR_AGENT_BIN
 elif command -v agent >/dev/null 2>&1; then
 	agent_bin=$(command -v agent)
+elif [ -x /usr/local/bin/agent ]; then
+	agent_bin=/usr/local/bin/agent
 elif [ -n "${HOME:-}" ] && [ -x "$HOME/.local/bin/agent" ]; then
 	agent_bin=$HOME/.local/bin/agent
 else
@@ -17,12 +23,17 @@ else
 fi
 "$agent_bin" --version >/dev/null
 
+# The CLI is an interactive TUI, not a service: launching it headless exits
+# immediately, so start only verifies the install and, when a key is
+# provided, that the key authenticates.
 key_file=${CURSOR_API_KEY_FILE:-}
-if [ -n "$key_file" ]; then
-	[ -r "$key_file" ] || fail "CURSOR_API_KEY_FILE is not readable"
-	CURSOR_API_KEY=$(cat "$key_file")
-	[ -n "$CURSOR_API_KEY" ] || fail "cursor_api_key is empty"
-	export CURSOR_API_KEY
+if [ -z "$key_file" ]; then
+	echo "Cursor CLI is ready; API key was not provided" >&2
+	exit 0
 fi
-
-exec "$agent_bin"
+[ -r "$key_file" ] || fail "CURSOR_API_KEY_FILE is not readable"
+CURSOR_API_KEY=$(cat "$key_file")
+[ -n "$CURSOR_API_KEY" ] || fail "cursor_api_key is empty"
+export CURSOR_API_KEY
+"$agent_bin" status >/dev/null || fail "Cursor API key validation failed"
+echo "Cursor CLI API key validated" >&2
