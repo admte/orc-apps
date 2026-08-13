@@ -6,10 +6,6 @@ fail() {
 	exit 1
 }
 
-# The installed `agent` command is a wrapper script that dereferences HOME;
-# agent-run phases execute without one, so pin it to the install prefix.
-export HOME=${HOME:-${CURSOR_INSTALL_HOME:-/opt/cursor}}
-
 if command -v agent >/dev/null 2>&1 && [ -z "${CURSOR_FORCE_INSTALL:-}" ]; then
 	agent --version
 	exit 0
@@ -26,10 +22,10 @@ x86_64 | amd64 | aarch64 | arm64) ;;
 *) fail "unsupported architecture: $(uname -m)" ;;
 esac
 
-# The official installer lays everything out under $HOME/.local. Install
-# environments may run without HOME, and a per-user home would hide the CLI
-# from every other user, so pin the install to a world-readable prefix and
-# expose the binary on the global PATH.
+# The official installer lays everything out under $HOME/.local, and a
+# per-user home (root's is 0700) would hide the CLI from every other user,
+# so pin the install to a world-readable prefix and expose the binary on
+# the global PATH.
 install_home=${CURSOR_INSTALL_HOME:-/opt/cursor}
 bin_dir=${CURSOR_BIN_DIR:-/usr/local/bin}
 case "$install_home" in
