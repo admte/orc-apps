@@ -6,10 +6,6 @@ fail() {
 	exit 1
 }
 
-# The installed `agent` command is a wrapper script that dereferences HOME;
-# agent-run phases execute without one, so pin it to the install prefix.
-export HOME=${HOME:-${CURSOR_INSTALL_HOME:-/opt/cursor}}
-
 if [ -n "${CURSOR_AGENT_BIN:-}" ] && [ -x "$CURSOR_AGENT_BIN" ]; then
 	agent_bin=$CURSOR_AGENT_BIN
 elif command -v agent >/dev/null 2>&1; then
