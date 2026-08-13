@@ -15,10 +15,12 @@ config:
         sensitive: true
         lifetime: startup
   versions:
-    source: github_releases
+    # Tags, not releases: the releases listing for openai/codex is ~27 MiB of
+    # release notes and asset metadata, which no reasonable fetch budget
+    # accommodates; the tag list carries the same version set in a few KiB.
+    source: github_tags
     url: https://github.com/openai/codex
     filter:
-      prerelease: false
       pattern: "^(rust-v)?[0-9]+\\.[0-9]+\\.[0-9]+$"
       limit: 30
   install:
