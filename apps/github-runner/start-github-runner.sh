@@ -3,7 +3,7 @@ set -eu
 
 SERVICE_USER=${SERVICE_USER:-ghrunner}
 
-work_dir=${WORK_DIR:-github-runner}
+work_dir=github-runner
 if [ ! -x "$work_dir/run.sh" ]; then
 	echo "github-runner start: $work_dir/run.sh not found; run install first" >&2
 	exit 1

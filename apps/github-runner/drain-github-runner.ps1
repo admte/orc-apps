@@ -28,7 +28,7 @@ function Get-GitHubApiPath {
 	return "orgs/$($parts[0])"
 }
 
-$workDir = if ($env:WORK_DIR) { $env:WORK_DIR } else { 'github-runner' }
+$workDir = 'github-runner'
 $configScript = Join-Path $workDir 'config.cmd'
 if (-not (Test-Path $configScript)) {
 	Write-Host "github-runner drain: $configScript not found; nothing to remove"

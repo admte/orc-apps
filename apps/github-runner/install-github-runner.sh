@@ -105,9 +105,11 @@ need python3
 [ -n "${URL:-}" ] || fail "URL is required"
 github_token=$(token_value)
 api_path=$(github_api_path)
-work_dir=${WORK_DIR:-github-runner}
-runner_name=${RUNNER_NAME:-$(hostname)}
-labels=${LABELS:-}
+work_dir=github-runner
+# The runner name is the host name (a pool member is `<pool>-<slot>`). Its label
+# is the pool name, sourced from the `pool.name` x-source (env POOL).
+runner_name=$(hostname)
+labels=${POOL:-}
 
 [ "$(id -u)" -eq 0 ] || fail "must run as root"
 ensure_service_user
