@@ -20,12 +20,12 @@ Linux with systemd only (`linux/amd64`, `linux/arm64`).
 
 ## Parameters
 
-- `jenkins_url` - Jenkins controller URL, for example `https://jenkins.example.com`.
-- `jenkins_username` - Jenkins username for Swarm authentication.
-- `jenkins_password` - sensitive Jenkins API token or password.
-- `labels` - optional comma-separated Swarm labels.
+- `jenkins_url` - **required** Jenkins controller URL, for example `https://jenkins.example.com`.
+- `jenkins_username` - **required** Jenkins username for Swarm authentication.
+- `jenkins_password` - **required** sensitive Jenkins API token or password.
 
-The Swarm agent name defaults to the current hostname.
+The Swarm agent's labels are the pool name (sourced from the `pool.name` x-source), so they
+are not a parameter. The agent name defaults to the current hostname.
 
 The install phase copies the runner to `/etc/jenkins-agent/jenkins-agent.sh`. The systemd
 service invokes this runner on every start and restart. Before launching the agent, it checks
