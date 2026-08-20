@@ -20,12 +20,12 @@ does not repeat explicit install/start/drain commands.
 
 ## Parameters
 
-- `url` - GitHub repository or organization URL, for example `https://github.com/org/repo`.
-- `token` - sensitive GitHub token. The token must be able to create runner registration
-  and removal tokens for the selected repository or organization.
-- `labels` - optional comma-separated labels.
-- `runner_name` - optional runner name. Defaults to the host name.
-- `work_dir` - optional runner install directory. Defaults to `github-runner`.
+- `url` - **required** GitHub repository or organization URL, for example `https://github.com/org/repo`.
+- `token` - **required** sensitive GitHub token. The token must be able to create runner
+  registration and removal tokens for the selected repository or organization.
+
+The runner name is the host name and its label is the pool name (sourced from the
+`pool.name` x-source), so neither is a parameter. The runner installs under `github-runner`.
 
 ## Build + Push
 

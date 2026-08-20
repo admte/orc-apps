@@ -49,7 +49,7 @@ command -v curl >/dev/null 2>&1 || fail "curl is required"
 command -v python3 >/dev/null 2>&1 || fail "python3 is required"
 [ -n "${URL:-}" ] || fail "URL is required"
 
-work_dir=${WORK_DIR:-github-runner}
+work_dir=github-runner
 if [ ! -x "$work_dir/config.sh" ]; then
 	echo "github-runner drain: $work_dir/config.sh not found; nothing to remove" >&2
 	exit 0

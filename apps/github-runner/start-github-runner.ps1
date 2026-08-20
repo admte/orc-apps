@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 
-$workDir = if ($env:WORK_DIR) { $env:WORK_DIR } else { 'github-runner' }
+$workDir = 'github-runner'
 $runScript = Join-Path $workDir 'run.cmd'
 if (-not (Test-Path $runScript)) {
 	throw "github-runner start: $runScript not found; run install first"

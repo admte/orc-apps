@@ -38,9 +38,10 @@ function Get-RunnerArch {
 
 $githubToken = Get-Token
 $apiPath = Get-GitHubApiPath
-$workDir = if ($env:WORK_DIR) { $env:WORK_DIR } else { 'github-runner' }
-$runnerName = if ($env:RUNNER_NAME) { $env:RUNNER_NAME } else { $env:COMPUTERNAME }
-$labels = if ($env:LABELS) { $env:LABELS } else { '' }
+$workDir = 'github-runner'
+# Runner name is the host name; its label is the pool name (pool.name x-source -> POOL).
+$runnerName = $env:COMPUTERNAME
+$labels = if ($env:POOL) { $env:POOL } else { '' }
 
 New-Item -ItemType Directory -Force -Path $workDir | Out-Null
 
