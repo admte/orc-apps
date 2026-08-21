@@ -7,6 +7,7 @@ config:
   params:
     type: object
     required: []
+    x-ui-order: [jfrog_url, jfrog_user, jfrog_token]
     properties:
       jfrog_url:
         type: string

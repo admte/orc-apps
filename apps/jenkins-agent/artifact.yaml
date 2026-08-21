@@ -7,6 +7,7 @@ config:
   params:
     type: object
     required: [jenkins_url, jenkins_username, jenkins_password]
+    x-ui-order: [jenkins_url, jenkins_username, jenkins_password]
     properties:
       jenkins_url:
         type: string
