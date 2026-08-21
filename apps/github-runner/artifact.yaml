@@ -7,6 +7,7 @@ config:
   params:
     type: object
     required: [url, token]
+    x-ui-order: [url, token]
     properties:
       url:
         type: string
