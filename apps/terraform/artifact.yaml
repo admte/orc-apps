@@ -1,0 +1,22 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: terraform
+  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  org.opencontainers.image.description: HashiCorp Terraform - infrastructure as code CLI
+config:
+  versions:
+    source: github_releases
+    url: https://github.com/hashicorp/terraform
+    filter:
+      prerelease: false
+      latest_per: minor
+  install: {}
+  uninstall: {}
+files:
+  - install-terraform.sh
+  - uninstall-terraform.sh
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
