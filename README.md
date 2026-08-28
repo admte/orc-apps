@@ -134,6 +134,7 @@ low-level, one-platform extract.
 | cursor | draft | Cursor CLI with optional startup API key |
 | github-runner | draft | GitHub Actions self-hosted runner; linux + darwin + windows |
 | jenkins-agent | draft | Jenkins Swarm agent via systemd; linux only |
+| terraform | draft | Terraform CLI from HashiCorp Releases; version-scoped install; linux only |
 | kvm-server | planned | JSON-RPC plugin (spec 031) |
 
 `pxenode` stays in orc-server.
