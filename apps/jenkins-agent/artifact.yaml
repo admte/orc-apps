@@ -30,14 +30,31 @@ config:
         x-source:
           kind: pool.name
   install: {}
-  start: {}
-  drain:
-    timeout: 120s
+  # Runtime-managed service: the node writes the systemd unit from this block, so
+  # the package ships no unit file and never enables anything for boot. setpriv
+  # (never su or runuser) drops to the jenkins account inside the same session, so
+  # the Swarm client stays the service's own process and the stop signal reaches
+  # it. The runner re-reads the password file on every restart.
+  start:
+    command: >-
+      exec setpriv --reuid=jenkins --regid=jenkins --init-groups
+      env HOME=/var/lib/jenkins-agent
+      /etc/jenkins-agent/jenkins-agent.sh
+      "$JENKINS_URL" "$JENKINS_USERNAME" /var/lib/jenkins-agent/jenkins.password
+      "$(hostname)" "$LABELS" /var/lib/jenkins-agent
+      /var/lib/jenkins-agent/logging.properties
+    service: jenkins-agent
+    restart: always
+  # stop-jenkins-agent.sh marks the agent offline and waits for its build; the
+  # timeout is a long build, the grace is the JVM's own shutdown.
+  stop:
+    timeout: 30m
+    grace: 30s
 files:
   - install-jenkins-agent.sh
-  - start-jenkins-agent.sh
-  - drain-jenkins-agent.sh
+  - stop-jenkins-agent.sh
   - run-jenkins-agent.sh
+  - jenkins-agent-common.sh
 platforms:
   - os: linux
     arch: amd64

@@ -29,7 +29,7 @@ apps/
     install-uv.ps1
   github-runner/
     artifact.yaml          # GitHub Actions self-hosted runner
-    install/start/remove scripts for unix + windows
+    install/stop/stopped scripts for unix + windows
 scripts/install.sh         # downloads the orc CLI into ./orc
 scripts/build-and-push-github-runner.sh
 .github/workflows/ci.yml   # validate on PR, publish on <app>/<version> tags
@@ -132,8 +132,8 @@ low-level, one-platform extract.
 | claude | draft | Claude Code with optional Anthropic API key configuration |
 | codex | draft | OpenAI Codex CLI with optional API key authentication |
 | cursor | draft | Cursor CLI with optional startup API key |
-| github-runner | draft | GitHub Actions self-hosted runner; linux + darwin + windows |
-| jenkins-agent | draft | Jenkins Swarm agent via systemd; linux only |
+| github-runner | draft | GitHub Actions self-hosted runner as a managed service; drains the in-flight job on stop; linux + windows |
+| jenkins-agent | draft | Jenkins Swarm agent as a managed systemd service; drains the in-flight build on stop; linux only |
 | terraform | draft | Terraform CLI from HashiCorp Releases; version-scoped install; linux only |
 | kvm-server | planned | JSON-RPC plugin (spec 031) |
 

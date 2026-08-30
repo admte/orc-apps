@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=jenkins-agent-common.sh
+. "$SCRIPT_DIR/jenkins-agent-common.sh"
+
 fail() {
 	echo "jenkins-agent runner: $*" >&2
 	exit 1
@@ -21,15 +25,8 @@ AGENT_DIR=$6
 LOG_CONFIG_PATH=$7
 SWARM_JAR_PATH="$AGENT_DIR/swarm-client.jar"
 
-jenkins_base_url() {
-	url=${JENKINS_URL%/}
-	case "$url" in
-	http://* | https://*) ;;
-	*) fail "Jenkins URL must start with http:// or https://" ;;
-	esac
-	[ -n "${url#*://}" ] || fail "Jenkins URL host is required"
-	printf '%s' "$url"
-}
+[ -n "$AGENT_NAME" ] || AGENT_NAME=$(hostname)
+[ -n "$AGENT_NAME" ] || fail "agent name is empty"
 
 machine_arch() {
 	case "$(uname -m)" in
@@ -40,11 +37,8 @@ machine_arch() {
 }
 
 fetch_jenkins_controller_info() {
-	base=$(jenkins_base_url)
-	script_url="$base/scriptText"
-	cookie_jar=$(mktemp)
-	body_file=$(mktemp)
-	trap 'rm -f "$cookie_jar" "$body_file"' EXIT INT TERM
+	jenkins_session_open "$JENKINS_URL" "$JENKINS_USERNAME" "$jenkins_password"
+	body_file="$jenkins_session_dir/script"
 
 	script='import groovy.json.JsonOutput;
 
@@ -59,50 +53,23 @@ println JsonOutput.toJson([
 $script
 EOF
 
-	crumb_field=""
-	crumb_value=""
-	crumb_json=$(curl -fsS -u "$JENKINS_USERNAME:$jenkins_password" \
-		-c "$cookie_jar" -b "$cookie_jar" \
-		"$base/crumbIssuer/api/json" 2>/dev/null || true)
-	if [ -n "$crumb_json" ]; then
-		crumb_field=$(printf '%s' "$crumb_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("crumbRequestField",""))')
-		crumb_value=$(printf '%s' "$crumb_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("crumb",""))')
-	fi
-
-	post_script() {
-		if [ -n "$crumb_field" ] && [ -n "$crumb_value" ]; then
-			curl -fsS -u "$JENKINS_USERNAME:$jenkins_password" \
-				-c "$cookie_jar" -b "$cookie_jar" \
-				-H "Content-Type: application/x-www-form-urlencoded" \
-				-H "$crumb_field: $crumb_value" \
-				--data-binary @"$body_file" \
-				"$script_url"
-		else
-			curl -fsS -u "$JENKINS_USERNAME:$jenkins_password" \
-				-c "$cookie_jar" -b "$cookie_jar" \
-				-H "Content-Type: application/x-www-form-urlencoded" \
-				--data-binary @"$body_file" \
-				"$script_url"
-		fi
-	}
-
-	response=$(post_script 2>/dev/null || true)
+	jenkins_fetch_crumb optional
+	response=$(jenkins_post /scriptText \
+		-H "Content-Type: application/x-www-form-urlencoded" \
+		--data-binary @"$body_file" 2>/dev/null || true)
 	case "$response" in
 	*'"JavaVersion"'*) ;;
 	*)
-		crumb_json=$(curl -fsS -u "$JENKINS_USERNAME:$jenkins_password" \
-			-c "$cookie_jar" -b "$cookie_jar" \
-			"$base/crumbIssuer/api/json")
-		crumb_field=$(printf '%s' "$crumb_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("crumbRequestField",""))')
-		crumb_value=$(printf '%s' "$crumb_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("crumb",""))')
-		[ -n "$crumb_field" ] && [ -n "$crumb_value" ] || fail "failed to fetch Jenkins CSRF crumb"
-		response=$(post_script)
+		# A stale or missing crumb is the usual cause; take a fresh one and insist.
+		jenkins_fetch_crumb required
+		response=$(jenkins_post /scriptText \
+			-H "Content-Type: application/x-www-form-urlencoded" \
+			--data-binary @"$body_file")
 		;;
 	esac
 
+	jenkins_session_close
 	printf '%s' "$response" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)))'
-	rm -f "$cookie_jar" "$body_file"
-	trap - EXIT INT TERM
 }
 
 parse_java_major() {
@@ -165,7 +132,7 @@ install_temurin_java() {
 	tmp_dir=$(mktemp -d "$AGENT_DIR/temurin.XXXXXX")
 	trap 'rm -rf "$tmp_dir"' EXIT INT TERM
 
-	echo "Downloading Temurin JDK $java_major from $download_url" >&2
+	echo "jenkins-agent runner: downloading Temurin JDK java=$java_major url=$download_url" >&2
 	archive="$tmp_dir/temurin.tar.gz"
 	curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o "$archive" "$download_url"
 	[ -s "$archive" ] || fail "downloaded Temurin archive is empty"
@@ -200,14 +167,14 @@ ensure_matching_java() {
 		local_major=$(installed_java_major "$java_binary" 2>/dev/null || true)
 	fi
 	if [ "$local_major" != "$java_major" ]; then
-		echo "Local Java does not match Jenkins Java $java_major; updating" >&2
+		echo "jenkins-agent runner: local Java does not match the controller; updating java=$java_major" >&2
 		install_temurin_java "$java_major"
 	fi
 	printf '%s' "$java_binary"
 }
 
 ensure_matching_swarm_jar() {
-	base=$(jenkins_base_url)
+	base=$(jenkins_base_url "$JENKINS_URL")
 	tmp=$(mktemp "$AGENT_DIR/swarm-client.XXXXXX.jar")
 	trap 'rm -f "$tmp"' EXIT INT TERM
 	curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
@@ -217,17 +184,18 @@ ensure_matching_swarm_jar() {
 
 	if [ -f "$SWARM_JAR_PATH" ] && cmp -s "$tmp" "$SWARM_JAR_PATH"; then
 		rm -f "$tmp"
-		echo "Local swarm-client.jar matches Jenkins controller" >&2
+		echo "jenkins-agent runner: swarm-client.jar matches the controller" >&2
 	else
 		chmod 0644 "$tmp"
 		mv "$tmp" "$SWARM_JAR_PATH"
-		echo "Updated swarm-client.jar from Jenkins controller" >&2
+		echo "jenkins-agent runner: updated swarm-client.jar from the controller" >&2
 	fi
 	trap - EXIT INT TERM
 }
 
 need cmp
 need curl
+need hostname
 need python3
 need tar
 [ -r "$PASSWORD_FILE" ] || fail "password file is not readable: $PASSWORD_FILE"
@@ -241,10 +209,15 @@ swarm_version=$(printf '%s' "$controller_info" | python3 -c 'import json,sys; pr
 [ -n "$swarm_version" ] || fail "Jenkins Swarm plugin is not installed"
 java_major=$(parse_java_major "$java_version")
 
-echo "Jenkins controller Java $java_version (major $java_major), Swarm plugin $swarm_version" >&2
+echo "jenkins-agent runner: controller java=$java_version java_major=$java_major swarm_plugin=$swarm_version" >&2
 java_binary=$(ensure_matching_java "$java_major")
 ensure_matching_swarm_jar
 
+# The JVM replaces this shell, so the service manager's stop signal lands on the
+# Swarm client itself. -retry/-retryInterval keep it reconnecting across a
+# controller restart instead of exiting; the app is not failed for an outage it
+# is expected to ride out.
+echo "jenkins-agent runner: starting the Swarm client name=$AGENT_NAME labels=$LABELS" >&2
 exec "$java_binary" \
 	"-Djava.util.logging.config.file=$LOG_CONFIG_PATH" \
 	-jar "$SWARM_JAR_PATH" \
@@ -255,7 +228,6 @@ exec "$java_binary" \
 	-fsroot "$AGENT_DIR" \
 	-deleteExistingClients \
 	-disableClientsUniqueId \
-	-noRetryAfterConnected \
 	-retry 5 \
 	-retryInterval 10 \
 	-master "$JENKINS_URL" \

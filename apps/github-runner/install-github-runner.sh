@@ -24,14 +24,12 @@ ensure_service_user() {
 	id "$SERVICE_USER" >/dev/null 2>&1 || fail "failed to create service user $SERVICE_USER"
 }
 
-# The service account is created without a home directory, so point HOME at the
-# runner directory it owns; the runner writes dotfiles relative to HOME.
+# setpriv, never su or runuser: those start a new session, which is what puts an
+# app outside the process group the runtime signals. The account has no home
+# directory, so HOME points at the runner directory it owns.
 as_service_user() {
-	su -s /bin/sh "$SERVICE_USER" -c "HOME=$(shell_quote "$work_dir"); export HOME; $1"
-}
-
-shell_quote() {
-	printf '%s' "$1" | sed "s/'/'\\\\''/g; s/^/'/; s/\$/'/"
+	setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_USER" --init-groups \
+		env HOME="$work_dir" "$@"
 }
 
 json_field() {
@@ -99,8 +97,10 @@ runner_arch() {
 }
 
 need curl
-need tar
+need hostname
 need python3
+need setpriv
+need tar
 
 [ -n "${URL:-}" ] || fail "URL is required"
 github_token=$(token_value)
@@ -135,16 +135,16 @@ checksum=$(printf '%s\n' "$selected" | sed -n 3p)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-echo "Downloading GitHub Actions runner ($archive)" >&2
+echo "github-runner install: downloading the runner archive=$archive" >&2
 curl -fsSL "$url" -o "$tmp/$archive"
 if [ -n "$checksum" ]; then
 	need sha256sum
 	actual=$(sha256sum "$tmp/$archive" | awk '{ print $1 }')
 	[ "$actual" = "$checksum" ] ||
-		fail "checksum mismatch for $archive: expected $checksum, got $actual"
-	echo "Checksum verified" >&2
+		fail "checksum mismatch archive=$archive expected=$checksum actual=$actual"
+	echo "github-runner install: checksum verified archive=$archive" >&2
 else
-	echo "GitHub did not publish a checksum for $archive; skipping verification" >&2
+	echo "github-runner install: no published checksum; skipping verification archive=$archive" >&2
 fi
 tar -xzf "$tmp/$archive" -C "$work_dir"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$work_dir"
@@ -161,10 +161,8 @@ if [ -n "$labels" ]; then
 	set -- "$@" --labels "$labels"
 fi
 
-config_cmd="cd $(shell_quote "$work_dir") && ./config.sh"
-for arg in "$@"; do
-	config_cmd="$config_cmd $(shell_quote "$arg")"
-done
+echo "github-runner install: registering the runner name=$runner_name labels=$labels user=$SERVICE_USER" >&2
+cd "$work_dir"
+as_service_user ./config.sh "$@"
 
-echo "Configuring runner as $SERVICE_USER" >&2
-as_service_user "$config_cmd"
+echo "github-runner install: complete name=$runner_name dir=$work_dir" >&2
