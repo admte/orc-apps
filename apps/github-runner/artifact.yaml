@@ -26,26 +26,47 @@ config:
         x-source:
           kind: pool.name
   install: {}
-  start: {}
-  drain:
-    timeout: 600s
+  # Runtime-managed service: the node writes the service definition from this
+  # block, so the package never calls svc.sh install or config.cmd --runasservice.
+  # A service survives an agent upgrade or crash, which is what keeps a build
+  # running across one. The start command differs per platform, so it comes from
+  # each platform's `start_command` var.
+  start:
+    command: "{start_command}"
+    service: github-runner
+  # SIGINT is what the Actions listener reads as "finish this job, then exit", so
+  # it is the signal the generated service definition carries. stop-github-runner
+  # has already waited for the job by the time it is sent; the hour is the cap on
+  # that wait.
+  stop:
+    signal: SIGINT
+    timeout: 1h
+    grace: 30s
+  # Releases the GitHub registration, and only when the node is ending for good.
+  stopped:
+    timeout: 120s
 files:
   - install-github-runner.sh
-  - start-github-runner.sh
-  - drain-github-runner.sh
+  - stop-github-runner.sh
+  - stopped-github-runner.sh
   - install-github-runner.ps1
-  - start-github-runner.ps1
-  - drain-github-runner.ps1
+  - stop-github-runner.ps1
+  - stopped-github-runner.ps1
 platforms:
+  # The runner refuses to run as root, so setpriv (never su or runuser, which
+  # would put it in a session the stop signal cannot reach) drops to the account
+  # install created. HOME is the runner directory it owns.
   - os: linux
     arch: amd64
+    vars:
+      start_command: cd github-runner && exec setpriv --reuid=ghrunner --regid=ghrunner --init-groups env HOME="$PWD" ./run.sh
   - os: linux
     arch: arm64
-  - os: darwin
-    arch: amd64
-  - os: darwin
-    arch: arm64
+    vars:
+      start_command: cd github-runner && exec setpriv --reuid=ghrunner --regid=ghrunner --init-groups env HOME="$PWD" ./run.sh
+  # Windows runs the listener as the account the agent runs as; there is no
+  # unprivileged-user rule to satisfy.
   - os: windows
     arch: amd64
-  - os: windows
-    arch: arm64
+    vars:
+      start_command: Set-Location github-runner; .\run.cmd
