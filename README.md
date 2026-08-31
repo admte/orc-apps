@@ -133,7 +133,7 @@ low-level, one-platform extract.
 | codex | draft | OpenAI Codex CLI with optional API key authentication |
 | cursor | draft | Cursor CLI with optional startup API key |
 | github-runner | draft | GitHub Actions self-hosted runner as a managed service; drains the in-flight job on stop; linux + windows |
-| jenkins-agent | draft | Jenkins Swarm agent as a managed systemd service; drains the in-flight build on stop; linux only |
+| jenkins-agent | draft | Jenkins Swarm agent as a managed service; drains the in-flight build on stop; linux + windows |
 | terraform | draft | Terraform CLI from HashiCorp Releases; version-scoped install; linux only |
 | kvm-server | planned | JSON-RPC plugin (spec 031) |
 
