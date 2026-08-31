@@ -8,7 +8,7 @@ $ErrorActionPreference = 'Stop'
 $agentDir = if ($env:AGENT_DIR) { $env:AGENT_DIR } else { 'C:\ProgramData\jenkins-agent' }
 $passwordFile = Join-Path $agentDir 'jenkins.password'
 # The copy start-jenkins-agent.ps1 staged for the running agent; the fallback for a
-# stop that was handed no ca_bundle of its own.
+# stop that was handed no tls_ca of its own.
 $stagedCaPath = Join-Path $agentDir 'platform-ca.pem'
 # Kept under the 30m stop.timeout so the wait ends with a message of its own rather
 # than being cut off mid-poll.
@@ -190,14 +190,14 @@ $node = $env:COMPUTERNAME
 if (-not $node) { throw 'jenkins-agent stop: host name is empty' }
 
 # The controller this hook talks to is the one the running agent is connected to, so
-# it verifies against the same chain. CA_BUNDLE_FILE is the runtime's materialization
+# it verifies against the same chain. TLS_CA_FILE is the runtime's materialization
 # of the param for this phase; the copy start staged is the fallback, which is what
 # answers when the param resolved for start but not for this stop. Neither present
 # means the OS trust store, unchanged.
 $trustSource = ''
-if ($env:CA_BUNDLE_FILE -and (Test-Path -LiteralPath $env:CA_BUNDLE_FILE -PathType Leaf) -and
-	(Get-Item -LiteralPath $env:CA_BUNDLE_FILE).Length -gt 0) {
-	$trustSource = $env:CA_BUNDLE_FILE
+if ($env:TLS_CA_FILE -and (Test-Path -LiteralPath $env:TLS_CA_FILE -PathType Leaf) -and
+	(Get-Item -LiteralPath $env:TLS_CA_FILE).Length -gt 0) {
+	$trustSource = $env:TLS_CA_FILE
 } elseif ((Test-Path -LiteralPath $stagedCaPath -PathType Leaf) -and
 	(Get-Item -LiteralPath $stagedCaPath).Length -gt 0) {
 	$trustSource = $stagedCaPath

@@ -16,7 +16,7 @@ $runnerPath = Join-Path $runnerDir 'jenkins-agent.ps1'
 $caPath = Join-Path $agentDir 'platform-ca.pem'
 
 # Copies the platform's trust chain to a fixed path beside the rest of the agent's
-# state. CA_BUNDLE_FILE is the runtime's own materialization of the `ca_bundle`
+# state. TLS_CA_FILE is the runtime's own materialization of the `tls_ca`
 # param; it is withdrawn when the app stops, and the stop hook is a phase of its own.
 #
 # Copied on every start, never at install: the platform's certificates are short-lived
@@ -25,9 +25,9 @@ $caPath = Join-Path $agentDir 'platform-ca.pem'
 # is supplied the stale copy is removed, so a controller that moved to a publicly
 # issued certificate is not left verifying against yesterday's chain.
 function Copy-PlatformCaBundle($caPath) {
-	if ($env:CA_BUNDLE_FILE -and (Test-Path -LiteralPath $env:CA_BUNDLE_FILE -PathType Leaf) -and
-		(Get-Item -LiteralPath $env:CA_BUNDLE_FILE).Length -gt 0) {
-		Copy-Item -LiteralPath $env:CA_BUNDLE_FILE -Destination $caPath -Force
+	if ($env:TLS_CA_FILE -and (Test-Path -LiteralPath $env:TLS_CA_FILE -PathType Leaf) -and
+		(Get-Item -LiteralPath $env:TLS_CA_FILE).Length -gt 0) {
+		Copy-Item -LiteralPath $env:TLS_CA_FILE -Destination $caPath -Force
 		Write-Host "jenkins-agent start: staged the platform CA bundle path=$caPath"
 		return
 	}

@@ -10,7 +10,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 AGENT_DIR=${AGENT_DIR:-/var/lib/jenkins-agent}
 PASSWORD_FILE="$AGENT_DIR/jenkins.password"
 # The copy start-jenkins-agent.sh staged for the running agent; the fallback for a
-# stop that was handed no ca_bundle of its own.
+# stop that was handed no tls_ca of its own.
 STAGED_CA_PATH="$AGENT_DIR/platform-ca.pem"
 # Kept under the 30m stop.timeout so the wait ends with a message of its own
 # rather than being cut off mid-poll.
@@ -52,13 +52,13 @@ node=$(hostname)
 [ -n "$node" ] || fail "hostname is empty"
 
 # The controller this hook talks to is the one the running agent is connected to, so
-# it verifies against the same chain. CA_BUNDLE_FILE is the runtime's materialization
+# it verifies against the same chain. TLS_CA_FILE is the runtime's materialization
 # of the param for this phase; the copy start staged is the fallback, which is what
 # answers when the param resolved for start but not for this stop. Neither present
 # means the OS trust store, unchanged.
 trust_source=""
-if [ -n "${CA_BUNDLE_FILE:-}" ] && [ -s "$CA_BUNDLE_FILE" ]; then
-	trust_source=$CA_BUNDLE_FILE
+if [ -n "${TLS_CA_FILE:-}" ] && [ -s "$TLS_CA_FILE" ]; then
+	trust_source=$TLS_CA_FILE
 elif [ -s "$STAGED_CA_PATH" ]; then
 	trust_source=$STAGED_CA_PATH
 fi

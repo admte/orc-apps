@@ -15,7 +15,7 @@ param(
 	[string]$AgentDir,
 	[string]$LogConfigPath,
 	# Optional so an older start script -- one from a package installed before the
-	# ca_bundle param existed -- still runs this runner unchanged.
+	# tls_ca param existed -- still runs this runner unchanged.
 	[string]$CaBundlePath
 )
 

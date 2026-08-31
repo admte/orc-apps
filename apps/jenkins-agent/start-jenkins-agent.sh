@@ -16,7 +16,7 @@ AGENT_DIR=${AGENT_DIR:-/var/lib/jenkins-agent}
 SERVICE_USER=${SERVICE_USER:-jenkins}
 RUNNER_DIR=${RUNNER_DIR:-/etc/jenkins-agent}
 RUNNER_PATH="$RUNNER_DIR/jenkins-agent.sh"
-# Where the platform chain is staged for the runner. See stage_ca_bundle.
+# Where the platform chain is staged for the runner. See stage_tls_ca.
 CA_PATH="$AGENT_DIR/platform-ca.pem"
 
 fail() {
@@ -26,7 +26,7 @@ fail() {
 
 # Copies the platform's trust chain somewhere the jenkins account can read.
 #
-# CA_BUNDLE_FILE is the runtime's own materialization of the `ca_bundle` param: it
+# TLS_CA_FILE is the runtime's own materialization of the `tls_ca` param: it
 # lives in a 0700 directory owned by the account the runtime runs as, and it is
 # withdrawn when the app stops. This script still runs as that account, so it stages
 # a readable copy before setpriv hands the rest of the start to jenkins.
@@ -36,9 +36,9 @@ fail() {
 # bake snapshots — a chain baked into an image would be stale on first boot. When
 # nothing is supplied the stale copy is removed, so a controller that moved to a
 # publicly issued certificate is not left verifying against yesterday's chain.
-stage_ca_bundle() {
-	if [ -n "${CA_BUNDLE_FILE:-}" ] && [ -s "$CA_BUNDLE_FILE" ]; then
-		cat "$CA_BUNDLE_FILE" >"$CA_PATH" || fail "failed to stage the CA bundle path=$CA_PATH"
+stage_tls_ca() {
+	if [ -n "${TLS_CA_FILE:-}" ] && [ -s "$TLS_CA_FILE" ]; then
+		cat "$TLS_CA_FILE" >"$CA_PATH" || fail "failed to stage the CA bundle path=$CA_PATH"
 		chmod 0644 "$CA_PATH"
 		chown "$SERVICE_USER:$SERVICE_USER" "$CA_PATH" 2>/dev/null || true
 		echo "jenkins-agent start: staged the platform CA bundle path=$CA_PATH" >&2
@@ -52,7 +52,7 @@ stage_ca_bundle() {
 [ -n "${JENKINS_URL:-}" ] || fail "JENKINS_URL is required"
 [ -n "${JENKINS_USERNAME:-}" ] || fail "JENKINS_USERNAME is required"
 
-stage_ca_bundle
+stage_tls_ca
 
 # The account has no home directory, so HOME points at the agent directory it owns.
 # -disableClientsUniqueId makes the Swarm node name the host name, verbatim, which is

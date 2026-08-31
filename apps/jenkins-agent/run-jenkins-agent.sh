@@ -15,7 +15,7 @@ need() {
 }
 
 # The CA path is optional so an older start script — one from a package installed
-# before the ca_bundle param existed — still runs this runner unchanged.
+# before the tls_ca param existed — still runs this runner unchanged.
 case "$#" in
 7 | 8) ;;
 *) fail "expected Jenkins URL, username, password file, agent name, labels, agent directory, logging config, and optionally a CA bundle" ;;
