@@ -39,9 +39,6 @@ function Get-RunnerArch {
 $githubToken = Get-Token
 $apiPath = Get-GitHubApiPath
 $workDir = 'github-runner'
-# Runner name is the host name; its label is the pool name (pool.name x-source -> POOL).
-$runnerName = $env:COMPUTERNAME
-$labels = if ($env:POOL) { $env:POOL } else { '' }
 
 New-Item -ItemType Directory -Force -Path $workDir | Out-Null
 
@@ -75,21 +72,10 @@ try {
 	Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
 
-$registration = Invoke-RestMethod -Method Post `
-	-Headers @{ Accept = 'application/vnd.github+json'; Authorization = "token $githubToken" } `
-	-Uri "https://api.github.com/$apiPath/actions/runners/registration-token"
-
-$configArgs = @('--name', $runnerName, '--url', $env:URL, '--token', $registration.token, '--unattended', '--replace')
-if ($labels) {
-	$configArgs += @('--labels', $labels)
-}
-
-Push-Location $workDir
-try {
-	& .\config.cmd @configArgs
-	if ($LASTEXITCODE -ne 0) {
-		throw "config.cmd failed with exit code $LASTEXITCODE"
-	}
-} finally {
-	Pop-Location
-}
+# Nothing above may create node identity. A pool bake runs the install phase alone
+# and snapshots the disk, so anything written here is shared by every clone of the
+# image: registering would leave a dead runner on GitHub for a builder that no
+# longer exists, and `config.cmd` writes `.runner` and `.credentials` — the
+# runner's own auth material — into the snapshot. The registration is
+# start-github-runner.ps1's, once per node.
+Write-Host "github-runner install: complete dir=$workDir"

@@ -13,8 +13,8 @@ need() {
 }
 
 # The Actions runner refuses to configure or run as root ("Must not run with
-# sudo"), but lifecycle phases execute as root. Register a dedicated service
-# account and drop to it for every runner invocation.
+# sudo"), but lifecycle phases execute as root. Create a dedicated service
+# account here so start-github-runner.sh can drop to it.
 ensure_service_user() {
 	if id "$SERVICE_USER" >/dev/null 2>&1; then
 		return 0
@@ -22,18 +22,6 @@ ensure_service_user() {
 	need useradd
 	useradd -r -U -M -s /usr/sbin/nologin "$SERVICE_USER"
 	id "$SERVICE_USER" >/dev/null 2>&1 || fail "failed to create service user $SERVICE_USER"
-}
-
-# setpriv, never su or runuser: those start a new session, which is what puts an
-# app outside the process group the runtime signals. The account has no home
-# directory, so HOME points at the runner directory it owns.
-as_service_user() {
-	setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_USER" --init-groups \
-		env HOME="$work_dir" "$@"
-}
-
-json_field() {
-	python3 -c 'import json,sys; print(json.load(sys.stdin).get(sys.argv[1], ""))' "$1"
 }
 
 # Selects the runner build GitHub's service wants for this target from the
@@ -97,8 +85,9 @@ runner_arch() {
 }
 
 need curl
-need hostname
 need python3
+# Not used here any more, but the start phase drops to the service account with
+# it; a bake that produced an image without it would only fail at first boot.
 need setpriv
 need tar
 
@@ -106,10 +95,6 @@ need tar
 github_token=$(token_value)
 api_path=$(github_api_path)
 work_dir=github-runner
-# The runner name is the host name (a pool member is `<pool>-<slot>`). Its label
-# is the pool name, sourced from the `pool.name` x-source (env POOL).
-runner_name=$(hostname)
-labels=${POOL:-}
 
 [ "$(id -u)" -eq 0 ] || fail "must run as root"
 ensure_service_user
@@ -149,20 +134,10 @@ fi
 tar -xzf "$tmp/$archive" -C "$work_dir"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$work_dir"
 
-registration_json=$(curl -fsSL -X POST \
-	-H "Accept: application/vnd.github+json" \
-	-H "Authorization: token $github_token" \
-	"https://api.github.com/$api_path/actions/runners/registration-token")
-registration_token=$(printf '%s' "$registration_json" | json_field token)
-[ -n "$registration_token" ] || fail "failed to create registration token"
-
-set -- --name "$runner_name" --url "$URL" --token "$registration_token" --unattended --replace
-if [ -n "$labels" ]; then
-	set -- "$@" --labels "$labels"
-fi
-
-echo "github-runner install: registering the runner name=$runner_name labels=$labels user=$SERVICE_USER" >&2
-cd "$work_dir"
-as_service_user ./config.sh "$@"
-
-echo "github-runner install: complete name=$runner_name dir=$work_dir" >&2
+# Nothing below this point may create node identity. A pool bake runs the install
+# phase alone and snapshots the disk, so anything written here is shared by every
+# clone of the image: registering would leave a dead runner on GitHub for a
+# builder that no longer exists, and `config.sh` writes `.runner` and
+# `.credentials` — the runner's own auth material — into the snapshot. The
+# registration is start-github-runner.sh's, once per node.
+echo "github-runner install: complete dir=$work_dir user=$SERVICE_USER" >&2

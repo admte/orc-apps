@@ -8,16 +8,18 @@ agent upgrade or crash never touches a running build.
 github-runner/
   artifact.yaml
   install-github-runner.sh
+  start-github-runner.sh
   stop-github-runner.sh
   stopped-github-runner.sh
   install-github-runner.ps1
+  start-github-runner.ps1
   stop-github-runner.ps1
   stopped-github-runner.ps1
 ```
 
 Lifecycle scripts follow the `<phase>-github-runner.<ext>` naming convention. The app ships
-`install`, `stop`, and `stopped` scripts for both platforms; `start` is an explicit command in
-`artifact.yaml`, and an explicit command always wins over a same-named script.
+`install`, `start`, `stop`, and `stopped` scripts for both platforms and no explicit command
+for any phase, so each one resolves from the package by name and per platform.
 
 `linux/amd64`, `linux/arm64`, and `windows/amd64`. macOS is not in the manifest: the runtime
 has systemd and Windows SCM backends today, and darwin returns to the list when the launchd
@@ -38,17 +40,56 @@ working directory.
 ## Lifecycle
 
 **install** creates the `ghrunner` service account on Linux, downloads the runner build
-GitHub's service asks for, verifies its published checksum, and registers it with
-`config.sh --unattended --replace`. It registers no service: the node owns the service
-definition and generates it from `start:`. `svc.sh install` and `config.cmd --runasservice`
-are deliberately not used.
+GitHub's service asks for, verifies its published checksum, unpacks it under `github-runner`,
+and hands it to the service account. That is the whole of it: it does **not** register the
+runner, and the unpacked directory it leaves behind is unconfigured. It registers no service
+either — the node owns the service definition and generates it from `start:`, so `svc.sh
+install` and `config.cmd --runasservice` are deliberately not used.
 
-**start** is a runtime-managed service (`start.service: github-runner`). On Linux the command
-drops to `ghrunner` with `setpriv --reuid/--regid --init-groups` before `exec`ing `run.sh`;
-`su` and `runuser` are deliberately not used, because they start a new session where the stop
-signal can no longer reach the listener. On Windows the listener runs as the account the agent
-runs as. Because it is a service and not a child of the agent, an agent upgrade or crash
-leaves a running build alone; the node re-adopts the service by name afterwards.
+Registration is not in install because install is the phase a **pool bake** runs. A bake runs
+every app's install phase on a builder node, snapshots the disk, and destroys the builder, so
+anything install writes is shared by every clone of that image. Registering there would leave a
+dead registration on GitHub for a node that no longer exists, and — the serious half —
+`config.sh` writes `.runner` and `.credentials`, the runner's own auth material, which would
+then travel inside a pool image that lives in the registry. A clone booted from that image also
+never re-runs install (the install marker comes in with the snapshot), so it would start the
+listener under the *builder's* identity rather than its own. Registration is node identity, and
+node identity belongs in the phase that runs once per node.
+
+**start** (`start-github-runner.{sh,ps1}`) is a runtime-managed service: the package ships a
+start script and `artifact.yaml` names `start.service: github-runner`, and a start command that
+resolves — from config or, as here, from a packaged script — together with a `service` name is
+what selects runtime-managed service mode.
+
+The script registers, then becomes the listener. It looks for `.runner` in the runner
+directory, the file `config.sh` writes once a directory is configured. If it is missing — a
+fresh install, or the first boot of a clone whose baked image carried the unpacked runner but
+deliberately no identity — the script mints a fresh registration token and runs
+`config.sh --name <hostname> --url <url> --token <fresh> --unattended --replace`
+(plus `--labels <pool>` when a pool label is set) as the service account, so the node registers
+under its **own** host name. If `.runner` is present the node already has an identity — the
+ordinary service restart — and registration is skipped, which is also what `config.sh` itself
+demands: it refuses to configure an already-configured directory. The registration token is
+minted at the moment it is used and never written anywhere.
+
+It then **restores the pool label**, on both paths and idempotently: it looks the runner up by
+name (walking the paginated runner list, the same lookup `stop` uses) and
+`POST .../actions/runners/{id}/labels` with `{"labels":["<pool>"]}`, which adds a label without
+replacing the ones already there. This is not cosmetic. `stop` takes the pool label off through
+the API to stop new jobs routing here during a drain, and the registration survives every stop
+reason except `terminate` — so without this step a drained node would come back online with
+`.runner` intact, skip `config.sh` (which is what carries `--labels`), and sit there holding
+only its default labels: online, healthy-looking, and never matched by `runs-on: <pool-name>`
+again. The step is skipped entirely when no pool label is set, and a failure in it is logged
+loudly but never stops the runner — a runner with no label still beats a node that will not
+start.
+
+It then `exec`s the listener. On Linux it drops to `ghrunner` with
+`setpriv --reuid/--regid --init-groups` first; `su` and `runuser` are deliberately not used,
+because they start a new session where the stop signal can no longer reach the listener. On
+Windows the listener runs as the account the agent runs as. Because it is a service and not a
+child of the agent, an agent upgrade or crash leaves a running build alone; the node re-adopts
+the service by name afterwards.
 
 **stop** (`stop-github-runner.{sh,ps1}`, `timeout: 1h`, `grace: 30s`) runs while the listener
 is still alive. It looks the runner up by name and removes the pool label through
@@ -59,7 +100,8 @@ not deregister and it does not stop the listener — the runtime does that next,
 
 Removing the pool label leaves the runner's default labels (`self-hosted`, the OS, the
 architecture) in place. A workflow that targets those alone can still be routed to this runner
-between the label removal and the stop signal.
+between the label removal and the stop signal. The label comes back on the next start, which
+re-adds it through the API, so a drained runner rejoins its pool.
 
 **stopped** (`stopped-github-runner.{sh,ps1}`, `timeout: 120s`) runs after every exit and
 looks at `APP_STOP_REASON`. On `terminate` — the node is ending and this install will never
@@ -67,7 +109,14 @@ start again — it mints a remove token and runs `config.sh remove`, retrying a 
 transient API error; the listener is already gone by then, so GitHub does not refuse the
 removal as busy. On every other reason (`restart`, `stop`, `shutdown`, `exit`) it exits 0
 immediately and leaves the registration intact, because the same install starts again against
-it.
+it and start reuses it on sight of `.runner`.
+
+The three hooks meet at that one file. `config.sh remove` deletes `.runner` and
+`.credentials`, so a `terminate` that is somehow followed by another start finds no identity
+and registers fresh rather than starting an unconfigured listener; every other stop reason
+leaves `.runner` in place, and start reuses it. Labels ride alongside: `stop` removes the pool
+label and `start` puts it back, whichever branch it took, so the identity and the label are
+both whole again by the time the listener comes up.
 
 ## Build + Push
 
@@ -95,16 +144,22 @@ find /tmp/github-runner-pull -maxdepth 2 -type f -print
 Requires root and a GitHub token for the target repository or organization:
 
 ```bash
+# downloads and unpacks only; leaves the runner unconfigured
+sudo env \
+  URL=https://github.com/org/repo \
+  TOKEN=ghp_... \
+  sh install-github-runner.sh
+
+# what the generated service runs: registers on first start, then execs the listener
 sudo env \
   URL=https://github.com/org/repo \
   TOKEN=ghp_... \
   POOL=my-pool \
-  sh install-github-runner.sh
-
-# what the generated service runs
-sudo sh -c 'cd github-runner && exec setpriv --reuid=ghrunner --regid=ghrunner \
-  --init-groups env HOME="$PWD" ./run.sh'
+  sh start-github-runner.sh
 ```
+
+Run it twice: the first run logs `registering`, the second finds `.runner` and logs
+`already registered`. Both runs log `pool label ensured`.
 
 Start a workflow job on the runner, then in another shell drain it — the script removes the
 label, waits for the job, and leaves the listener running:
