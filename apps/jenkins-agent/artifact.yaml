@@ -31,12 +31,12 @@ config:
           kind: pool.name
       # The project's trust chain, so both halves of the agent can verify a
       # controller served with a platform-issued certificate: the HTTP calls and the
-      # JVM the Swarm client runs in. Delivered as a file (`CA_BUNDLE_FILE`) because
+      # JVM the Swarm client runs in. Delivered as a file (`TLS_CA_FILE`) because
       # of contentMediaType. Not required and never authoritative on its own — the
       # scripts add it to the platform's own trust store rather than replacing it, so
       # a publicly trusted controller, or a plain http:// one, keeps working whether
       # this resolves or not.
-      ca_bundle:
+      tls_ca:
         type: string
         title: TLS CA bundle
         contentMediaType: application/x-pem-file

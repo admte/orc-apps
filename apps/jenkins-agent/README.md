@@ -34,8 +34,8 @@ install copies to a fixed path and start invokes.
 - `jenkins_url` - **required** Jenkins controller URL, for example `https://jenkins.example.com`.
 - `jenkins_username` - **required** Jenkins username for Swarm authentication.
 - `jenkins_password` - **required** sensitive Jenkins API token or password.
-- `ca_bundle` - the project's trust chain, sourced from the platform (`x-source: ca.bundle`)
-  and delivered as a file the phase reads through `CA_BUNDLE_FILE`. Never entered by hand,
+- `tls_ca` - the project's trust chain, sourced from the platform (`x-source: ca.bundle`)
+  and delivered as a file the phase reads through `TLS_CA_FILE`. Never entered by hand,
   and not required: see [TLS trust](#tls-trust).
 
 The Swarm agent's labels are the pool name (sourced from the `pool.name` x-source), so they
@@ -131,9 +131,9 @@ halves of this app have to verify it: the HTTP calls (`/crumbIssuer`, `/scriptTe
 `swarm-client.jar`, and the stop hook's `/computer/<name>` calls) and the JVM the Swarm
 client runs in. The two do not share a trust store, so each is dealt with separately.
 
-The chain comes from the `ca_bundle` param. Nothing about it is entered by an operator: the
+The chain comes from the `tls_ca` param. Nothing about it is entered by an operator: the
 platform resolves `x-source: ca.bundle` to the project's chain (intermediate + root) and the
-runtime materializes it as a file, whose path each phase reads from `CA_BUNDLE_FILE`.
+runtime materializes it as a file, whose path each phase reads from `TLS_CA_FILE`.
 
 **Additive, never authoritative.** Both platforms *add* the chain to the trust store they
 already have; neither replaces it. That is what makes the param optional in effect: the
@@ -160,7 +160,7 @@ is needed: on Linux the param file is `0600` in a `0700` directory owned by the 
 runtime runs as, and the agent runs as `jenkins` after `setpriv`; on both platforms the stop
 hook is a separate phase. `start` re-stages on every start and **deletes** the staged copy
 when nothing was supplied, so a controller that moved to a publicly issued certificate is not
-left verifying against yesterday's chain. `stop` prefers its own `CA_BUNDLE_FILE` and falls
+left verifying against yesterday's chain. `stop` prefers its own `TLS_CA_FILE` and falls
 back to the staged copy.
 
 Nothing is done at **install**: the platform's certificates are short-lived and are renewed by
@@ -254,11 +254,11 @@ sudo env \
   JENKINS_URL=https://jenkins.example.com \
   JENKINS_USERNAME=agent-user \
   LABELS=my-pool \
-  CA_BUNDLE_FILE=/path/to/platform-ca.pem \
+  TLS_CA_FILE=/path/to/platform-ca.pem \
   sh start-jenkins-agent.sh
 ```
 
-`CA_BUNDLE_FILE` stands in for what the runtime materializes from the `ca_bundle` param.
+`TLS_CA_FILE` stands in for what the runtime materializes from the `tls_ca` param.
 Leave it out to exercise the no-CA path.
 
 Check the agent in Jenkins under **Build Executor Status**. In another shell, drain it — the
@@ -284,7 +284,7 @@ powershell -File .\install-jenkins-agent.ps1
 
 # what the generated service runs
 $env:LABELS = 'my-pool'
-$env:CA_BUNDLE_FILE = 'C:\path\to\platform-ca.pem'   # optional; omit for the no-CA path
+$env:TLS_CA_FILE = 'C:\path\to\platform-ca.pem'   # optional; omit for the no-CA path
 powershell -File .\start-jenkins-agent.ps1
 ```
 
