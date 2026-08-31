@@ -14,7 +14,12 @@ need() {
 	command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
 }
 
-[ "$#" -eq 7 ] || fail "expected Jenkins URL, username, password file, agent name, labels, agent directory, and logging config"
+# The CA path is optional so an older start script — one from a package installed
+# before the ca_bundle param existed — still runs this runner unchanged.
+case "$#" in
+7 | 8) ;;
+*) fail "expected Jenkins URL, username, password file, agent name, labels, agent directory, logging config, and optionally a CA bundle" ;;
+esac
 
 JENKINS_URL=$1
 JENKINS_USERNAME=$2
@@ -23,7 +28,12 @@ AGENT_NAME=$4
 LABELS=$5
 AGENT_DIR=$6
 LOG_CONFIG_PATH=$7
+CA_BUNDLE_PATH=${8:-}
 SWARM_JAR_PATH="$AGENT_DIR/swarm-client.jar"
+# The OS store plus the platform chain, for curl.
+CA_TRUST_PATH="$AGENT_DIR/ca-trust.pem"
+# The JDK's own cacerts plus the platform chain, for the JVM.
+TRUSTSTORE_PATH="$AGENT_DIR/truststore.p12"
 
 [ -n "$AGENT_NAME" ] || AGENT_NAME=$(hostname)
 [ -n "$AGENT_NAME" ] || fail "agent name is empty"
@@ -177,7 +187,7 @@ ensure_matching_swarm_jar() {
 	base=$(jenkins_base_url "$JENKINS_URL")
 	tmp=$(mktemp "$AGENT_DIR/swarm-client.XXXXXX.jar")
 	trap 'rm -f "$tmp"' EXIT INT TERM
-	curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+	jenkins_curl_raw -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
 		-u "$JENKINS_USERNAME:$jenkins_password" \
 		"$base/swarm/swarm-client.jar" -o "$tmp"
 	[ -s "$tmp" ] || fail "downloaded swarm-client.jar is empty"
@@ -193,6 +203,55 @@ ensure_matching_swarm_jar() {
 	trap - EXIT INT TERM
 }
 
+# Rebuilds the JVM's truststore: a copy of the JDK's own cacerts with the platform
+# chain added to it.
+#
+# A copy rather than the JDK's cacerts in place, because the runner replaces that
+# whole JDK directory whenever the controller's Java major version changes — an
+# import into the downloaded artifact would be silently discarded by the next swap,
+# and a mutated artifact no longer matches what was downloaded. Rebuilding from
+# whichever JDK is current, on every start, is idempotent by construction: there is
+# no alias to delete first and no way to drift.
+#
+# Copying cacerts rather than building an empty store keeps the public roots, so a
+# controller with a publicly issued certificate verifies through the same truststore.
+build_java_truststore() {
+	java_home_dir=$1
+	source_store="$java_home_dir/lib/security/cacerts"
+	keytool="$java_home_dir/bin/keytool"
+	[ -s "$source_store" ] || fail "JDK truststore not found: $source_store"
+	[ -x "$keytool" ] || fail "keytool not found: $keytool"
+
+	rm -f "$TRUSTSTORE_PATH"
+	cp "$source_store" "$TRUSTSTORE_PATH"
+	chmod 0644 "$TRUSTSTORE_PATH"
+
+	# keytool -importcert takes one certificate per alias: a bundle carrying the
+	# intermediate and the root has to be split, or only the first would land.
+	split_dir=$(mktemp -d "$AGENT_DIR/ca-split.XXXXXX")
+	trap 'rm -rf "$split_dir"' EXIT INT TERM
+	awk -v dir="$split_dir" '
+		/^-----BEGIN CERTIFICATE-----/ { count += 1; out = sprintf("%s/ca-%03d.pem", dir, count); inside = 1 }
+		inside { print > out }
+		/^-----END CERTIFICATE-----/ { if (inside) { close(out); inside = 0 } }
+	' "$CA_BUNDLE_PATH"
+
+	imported=0
+	for cert in "$split_dir"/ca-*.pem; do
+		[ -f "$cert" ] || continue
+		imported=$((imported + 1))
+		"$keytool" -importcert -noprompt -trustcacerts \
+			-alias "orc-platform-ca-$imported" -file "$cert" \
+			-keystore "$TRUSTSTORE_PATH" -storepass changeit >/dev/null ||
+			fail "failed to import the platform CA alias=orc-platform-ca-$imported"
+	done
+	rm -rf "$split_dir"
+	trap - EXIT INT TERM
+	[ "$imported" -gt 0 ] || fail "no certificate in the platform CA bundle: $CA_BUNDLE_PATH"
+	echo "jenkins-agent runner: rebuilt the JVM truststore certs=$imported path=$TRUSTSTORE_PATH" >&2
+}
+
+need awk
 need cmp
 need curl
 need hostname
@@ -201,6 +260,19 @@ need tar
 [ -r "$PASSWORD_FILE" ] || fail "password file is not readable: $PASSWORD_FILE"
 jenkins_password=$(tr -d '\r\n' <"$PASSWORD_FILE")
 [ -n "$jenkins_password" ] || fail "password file is empty"
+
+# Before the first controller call, and unconditionally on every start: the platform
+# renews its certificates by restarting this app, so the chain staged for this run is
+# the only one that can be trusted to be current. With none supplied, JENKINS_CA_BUNDLE
+# stays empty and curl verifies against the OS store, exactly as it always did.
+if [ -n "$CA_BUNDLE_PATH" ] && [ -s "$CA_BUNDLE_PATH" ]; then
+	jenkins_trust_init "$CA_BUNDLE_PATH" "$CA_TRUST_PATH"
+	echo "jenkins-agent runner: verifying the controller against the platform CA path=$CA_TRUST_PATH" >&2
+else
+	CA_BUNDLE_PATH=""
+	rm -f "$CA_TRUST_PATH" "$TRUSTSTORE_PATH"
+	echo "jenkins-agent runner: no platform CA supplied; verifying against the OS trust store" >&2
+fi
 
 controller_info=$(fetch_jenkins_controller_info)
 java_version=$(printf '%s' "$controller_info" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("JavaVersion",""))')
@@ -211,15 +283,32 @@ java_major=$(parse_java_major "$java_version")
 
 echo "jenkins-agent runner: controller java=$java_version java_major=$java_major swarm_plugin=$swarm_version" >&2
 java_binary=$(ensure_matching_java "$java_major")
+# After the JDK is settled, so a swap is followed by a fresh import rather than
+# leaving the new JDK trusting nothing but the public roots.
+if [ -n "$CA_BUNDLE_PATH" ]; then
+	build_java_truststore "$AGENT_DIR/java-temurin-$java_major"
+fi
 ensure_matching_swarm_jar
 
 # The JVM replaces this shell, so the service manager's stop signal lands on the
 # Swarm client itself. -retry/-retryInterval keep it reconnecting across a
 # controller restart instead of exiting; the app is not failed for an outage it
 # is expected to ride out.
+#
+# The JVM does not read the OS trust store; it reads a truststore of its own. When
+# the platform handed us a chain, the client is pointed at the rebuilt copy of the
+# JDK's cacerts that carries it — otherwise at nothing, and the JDK's own default
+# applies. No flag here weakens verification.
 echo "jenkins-agent runner: starting the Swarm client name=$AGENT_NAME labels=$LABELS" >&2
+if [ -n "$CA_BUNDLE_PATH" ]; then
+	set -- "-Djavax.net.ssl.trustStore=$TRUSTSTORE_PATH" \
+		-Djavax.net.ssl.trustStorePassword=changeit
+else
+	set --
+fi
 exec "$java_binary" \
 	"-Djava.util.logging.config.file=$LOG_CONFIG_PATH" \
+	"$@" \
 	-jar "$SWARM_JAR_PATH" \
 	-name "$AGENT_NAME" \
 	-mode exclusive \

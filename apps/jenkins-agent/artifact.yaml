@@ -29,34 +29,54 @@ config:
         description: Swarm agent labels; sourced from the pool name.
         x-source:
           kind: pool.name
+      # The project's trust chain, so both halves of the agent can verify a
+      # controller served with a platform-issued certificate: the HTTP calls and the
+      # JVM the Swarm client runs in. Delivered as a file (`CA_BUNDLE_FILE`) because
+      # of contentMediaType. Not required and never authoritative on its own — the
+      # scripts add it to the platform's own trust store rather than replacing it, so
+      # a publicly trusted controller, or a plain http:// one, keeps working whether
+      # this resolves or not.
+      ca_bundle:
+        type: string
+        title: TLS CA bundle
+        contentMediaType: application/x-pem-file
+        x-source:
+          kind: ca.bundle
   install: {}
-  # Runtime-managed service: the node writes the systemd unit from this block, so
-  # the package ships no unit file and never enables anything for boot. setpriv
-  # (never su or runuser) drops to the jenkins account inside the same session, so
-  # the Swarm client stays the service's own process and the stop signal reaches
-  # it. The runner re-reads the password file on every restart.
+  # Runtime-managed service: the node writes the service definition from this block,
+  # so the package ships no unit file, registers nothing with the SCM, and never
+  # enables anything for boot. No `command` here — the packaged
+  # start-jenkins-agent.{sh,ps1} resolves per platform, and a start command that
+  # resolves (from config or from a packaged script) plus a `service` name is what
+  # selects runtime-managed service mode.
+  #
+  # On Linux the start script drops to the jenkins account with setpriv (never su or
+  # runuser), inside the same session, so the Swarm client stays the service's own
+  # process and the stop signal reaches it. The runner re-reads the password file --
+  # and rebuilds the CA trust material -- on every restart, which is what keeps a
+  # short-lived platform certificate working across a renewal.
   start:
-    command: >-
-      exec setpriv --reuid=jenkins --regid=jenkins --init-groups
-      env HOME=/var/lib/jenkins-agent
-      /etc/jenkins-agent/jenkins-agent.sh
-      "$JENKINS_URL" "$JENKINS_USERNAME" /var/lib/jenkins-agent/jenkins.password
-      "$(hostname)" "$LABELS" /var/lib/jenkins-agent
-      /var/lib/jenkins-agent/logging.properties
     service: jenkins-agent
     restart: always
-  # stop-jenkins-agent.sh marks the agent offline and waits for its build; the
+  # stop-jenkins-agent.{sh,ps1} marks the agent offline and waits for its build; the
   # timeout is a long build, the grace is the JVM's own shutdown.
   stop:
     timeout: 30m
     grace: 30s
 files:
   - install-jenkins-agent.sh
+  - start-jenkins-agent.sh
   - stop-jenkins-agent.sh
   - run-jenkins-agent.sh
   - jenkins-agent-common.sh
+  - install-jenkins-agent.ps1
+  - start-jenkins-agent.ps1
+  - stop-jenkins-agent.ps1
+  - run-jenkins-agent.ps1
 platforms:
   - os: linux
     arch: amd64
   - os: linux
     arch: arm64
+  - os: windows
+    arch: amd64

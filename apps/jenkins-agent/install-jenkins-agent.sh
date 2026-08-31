@@ -58,8 +58,8 @@ write_password_file() {
 }
 
 # The runner and its helper live at a fixed path so the service definition the
-# node writes from `start.command` keeps working regardless of where the app's
-# working directory lands.
+# node writes from `start:` keeps working regardless of where the app's working
+# directory lands; start-jenkins-agent.sh invokes this copy, not the packaged one.
 install_runner() {
 	[ -f "$SCRIPT_DIR/run-jenkins-agent.sh" ] || fail "runner script not found in $SCRIPT_DIR"
 	[ -f "$SCRIPT_DIR/jenkins-agent-common.sh" ] || fail "helper script not found in $SCRIPT_DIR"
