@@ -125,6 +125,9 @@ low-level, one-platform extract.
 | cpp-dev-tools | draft | C++ toolchain via host Linux package manager |
 | docker | draft | Docker engine via Docker's apt repo; install-only; linux only |
 | uv | draft | Python package manager uv; linux + darwin + windows |
+| node | draft | Version-scoped Node.js runtime; linux + windows |
+| java | draft | Version-scoped Eclipse Temurin JDK; linux + windows |
+| go | draft | Version-scoped Go toolchain; linux + windows |
 | aws | draft | AWS CLI v2 with optional startup credential configuration |
 | vault | draft | HashiCorp Vault CLI with optional AppRole authentication |
 | jfrog | draft | JFrog CLI with optional startup server configuration |

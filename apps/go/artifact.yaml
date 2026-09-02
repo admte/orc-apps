@@ -1,0 +1,30 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: go
+  org.opencontainers.image.description: Go programming language toolchain
+  org.opencontainers.image.source: https://go.dev
+config:
+  versions:
+    source: json
+    url: "https://go.dev/dl/?mode=json&include=all"
+    field: version
+    filter:
+      # Go 1.17 is the first release with archives for every declared
+      # platform, including Windows arm64.
+      pattern: '^go(?P<version>(1\.(1[7-9]|[2-9][0-9])|([2-9]|[1-9][0-9]+)\.[0-9]+)\.[0-9]+)$'
+      latest_per: minor
+      limit: 30
+files:
+  - install-go.sh
+  - uninstall-go.sh
+  - install-go.ps1
+  - uninstall-go.ps1
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
+  - os: windows
+    arch: amd64
+  - os: windows
+    arch: arm64
