@@ -1,0 +1,28 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: node
+  org.opencontainers.image.description: Node.js JavaScript runtime
+  org.opencontainers.image.source: https://nodejs.org
+config:
+  versions:
+    source: json
+    url: https://nodejs.org/dist/index.json
+    field: version
+    filter:
+      pattern: '^v(?P<version>\d+\.\d+\.\d+)$'
+      latest_per: minor
+      limit: 30
+files:
+  - install-node.sh
+  - uninstall-node.sh
+  - install-node.ps1
+  - uninstall-node.ps1
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
+  - os: windows
+    arch: amd64
+  - os: windows
+    arch: arm64
