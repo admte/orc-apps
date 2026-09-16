@@ -1,7 +1,6 @@
 # cpp-dev-tools
 
-Linux-only app that installs a C++ build toolchain using the host package manager
-(matching the in-process builtin in orc-server).
+Linux-only app that installs a C++ build toolchain using the host package manager.
 
 ```text
 cpp-dev-tools/

@@ -8,10 +8,10 @@ docker/
   install-docker.sh
 ```
 
-Install-only: there is no start phase. The install runs once as root during
-pool-image bake, sets up Docker's apt repo (`docker-ce`, `docker-ce-cli`,
+Install-only: there is no start phase. Installation runs as root, sets up Docker's apt repo
+(`docker-ce`, `docker-ce-cli`,
 `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin`), and enables
-the `docker` systemd service so the daemon starts on every clone boot.
+the `docker` systemd service so the daemon starts at boot.
 
 ## Parameters
 

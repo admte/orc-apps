@@ -5,7 +5,7 @@ Source repository for ORC application artifacts published to `ghcr.io/admte/<app
 Each app is packaged as an OCI artifact (`application/vnd.orc8r.app.v1`) using the public [orc CLI](https://github.com/admte/orc).
 
 This repo holds app **sources** (config, lifecycle scripts, helper binaries) as one
-`artifact.yaml` recipe per app. orc-agent pulls the published artifacts in production.
+`artifact.yaml` recipe per app. Use orc CLI to build, publish, and manage these apps.
 
 ## Layout
 
@@ -135,9 +135,6 @@ low-level, one-platform extract.
 | github-runner | draft | GitHub Actions self-hosted runner as a managed service; drains the in-flight job on stop; linux + windows |
 | jenkins-agent | draft | Jenkins Swarm agent as a managed service; drains the in-flight build on stop; linux + windows |
 | terraform | draft | Terraform CLI from HashiCorp Releases; version-scoped install; linux only |
-| kvm-server | planned | JSON-RPC plugin (spec 031) |
-
-`pxenode` stays in orc-server.
 
 ## Related repos
 

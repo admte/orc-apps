@@ -1,7 +1,7 @@
 # uv
 
 Installs the [uv](https://github.com/astral-sh/uv) Python package manager using Astral's
-official installer scripts (matching the in-process builtin in orc-server).
+official installer scripts.
 
 ```text
 uv/

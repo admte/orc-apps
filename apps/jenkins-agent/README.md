@@ -34,9 +34,9 @@ install copies to a fixed path and start invokes.
 - `jenkins_url` - **required** Jenkins controller URL, for example `https://jenkins.example.com`.
 - `jenkins_username` - **required** Jenkins username for Swarm authentication.
 - `jenkins_password` - **required** sensitive Jenkins API token or password.
-- `tls_ca` - the project's trust chain, sourced from the platform (`x-source: ca.bundle`)
-  and delivered as a file the phase reads through `TLS_CA_FILE`. Never entered by hand,
-  and not required: see [TLS trust](#tls-trust).
+- `tls_ca` - optional CA certificates for the Jenkins controller, delivered as a file
+  through `TLS_CA_FILE`. Integrations can supply this using `x-source: ca.bundle`;
+  see [TLS trust](#tls-trust).
 
 The Swarm agent's labels are the pool name (sourced from the `pool.name` x-source), so they
 are not a parameter. The agent name is the host name — `hostname` on Linux, `%COMPUTERNAME%`
@@ -57,7 +57,7 @@ runner also calls `/scriptText`, which needs **Overall/RunScripts**.
 | Password file | `<agent dir>/jenkins.password` | `<agent dir>\jenkins.password` |
 | Logging config | `<agent dir>/logging.properties` | `<agent dir>\logging.properties` |
 | JDK | `<agent dir>/java-temurin-<major>` | `<agent dir>\java-temurin-<major>` |
-| Staged platform CA | `<agent dir>/platform-ca.pem` | `<agent dir>\platform-ca.pem` |
+| Staged CA certificates | `<agent dir>/platform-ca.pem` | `<agent dir>\platform-ca.pem` |
 | curl trust file | `<agent dir>/ca-trust.pem` | — (validation callback) |
 | JVM truststore | `<agent dir>/truststore.p12` | `<agent dir>\truststore.p12` |
 | Runs as | the `jenkins` system account | the account the runtime runs as |
@@ -77,18 +77,14 @@ service account on Windows — there is no `setpriv` there and the app runs as t
 account — and on neither platform does it write a unit file, register an SCM service, or enable
 anything for boot: the node owns the service definition and generates it from `start:`.
 
-Nothing install writes is identity-bearing, and that is deliberate. Install is the phase a
-**pool bake** runs: it runs on a builder node, snapshots the disk, and destroys the builder,
-so everything install leaves behind is shared by every clone of that image. The agent's
-identity is its host name, and it is minted where it belongs — when the Swarm client connects,
-once per running node.
+The agent uses its host name as its identity when the Swarm client connects at start.
 
 **start** (`start-jenkins-agent.{sh,ps1}`) is a runtime-managed service
 (`start.service: jenkins-agent`, `restart: always`). There is no `start.command`: the packaged
 start script resolves per platform, and a start command that resolves — from config or from a
 packaged script — together with a `service` name is what selects runtime-managed service mode.
 
-The start script stages the platform CA (see [TLS trust](#tls-trust)) and otherwise only
+The start script stages the supplied CA certificates (see [TLS trust](#tls-trust)) and
 assembles the runner's arguments from the params and the host name. On
 Linux it drops to the `jenkins` account with `setpriv --reuid/--regid --init-groups` and
 `exec`s the runner, which `exec`s the JVM, so the Swarm client is the service's own process
@@ -126,20 +122,16 @@ the client disconnects, so there is no external registration left to release.
 
 ## TLS trust
 
-The Jenkins controller is usually served with a **platform-issued** certificate, and both
-halves of this app have to verify it: the HTTP calls (`/crumbIssuer`, `/scriptText`,
-`swarm-client.jar`, and the stop hook's `/computer/<name>` calls) and the JVM the Swarm
-client runs in. The two do not share a trust store, so each is dealt with separately.
+Both the HTTP calls (`/crumbIssuer`, `/scriptText`, `swarm-client.jar`, and the stop
+hook's `/computer/<name>` calls) and the JVM verify the Jenkins controller's certificate.
+They use separate trust stores.
 
-The chain comes from the `tls_ca` param. Nothing about it is entered by an operator: the
-platform resolves `x-source: ca.bundle` to the project's chain (intermediate + root) and the
-runtime materializes it as a file, whose path each phase reads from `TLS_CA_FILE`.
+For a controller using a private CA, supply its PEM certificate chain through `tls_ca`.
+The runtime exposes the file path as `TLS_CA_FILE`. Integrations can resolve
+`x-source: ca.bundle` to provide the same input.
 
-**Additive, never authoritative.** Both platforms *add* the chain to the trust store they
-already have; neither replaces it. That is what makes the param optional in effect: the
-platform hands this app its CA whether or not the controller is served with it, so a
-controller with a publicly issued certificate — or a plain `http://` one — keeps working
-untouched, and so does an assignment for which the param never resolved at all.
+The supplied certificates are added to the existing trust stores. Without this optional
+input, the HTTP client and JVM use their default trust stores.
 
 **No path disables verification.** There is no `curl -k`, no `-SkipCertificateCheck`, and no
 callback that returns true for an unverified peer. When a chain is supplied and the handshake
@@ -151,9 +143,9 @@ still fails, the phase fails and says so.
 |---|---|---|
 | Staged by `start` at | `<agent dir>/platform-ca.pem` | `<agent dir>\platform-ca.pem` |
 | HTTP calls | `curl --cacert <agent dir>/ca-trust.pem` | per-process certificate validation callback |
-| `ca-trust.pem` is | the OS CA bundle + the platform chain | — |
+| `ca-trust.pem` is | the OS CA bundle + the supplied chain | — |
 | JVM | `-Djavax.net.ssl.trustStore=<agent dir>/truststore.p12` | same |
-| `truststore.p12` is | a copy of the JDK's `cacerts` + the platform chain | same |
+| `truststore.p12` is | a copy of the JDK's `cacerts` + the supplied chain | same |
 
 `start` stages the chain because the runtime's own materialization is not reachable where it
 is needed: on Linux the param file is `0600` in a `0700` directory owned by the account the
@@ -163,14 +155,12 @@ when nothing was supplied, so a controller that moved to a publicly issued certi
 left verifying against yesterday's chain. `stop` prefers its own `TLS_CA_FILE` and falls
 back to the staged copy.
 
-Nothing is done at **install**: the platform's certificates are short-lived and are renewed by
-restarting the app, and install is also the phase a pool bake snapshots — a chain baked into
-an image would be stale on first boot.
+Trust files are refreshed on each **start** from the supplied CA certificates.
 
-**curl** gets one PEM file that is the OS trust store followed by the platform chain, rebuilt
+**curl** gets one PEM file that is the OS trust store followed by the supplied chain, rebuilt
 on every start. `--cacert` replaces curl's default, which is exactly why the OS store is
 concatenated in rather than dropped. On a host with no recognizable OS bundle the runner says
-so and verifies against the platform chain alone — still verification, just a narrower anchor
+so and verifies against the supplied chain alone — still verification, just a narrower anchor
 set.
 
 **Invoke-WebRequest** has no `--cacert`; its verification is the OS store's. Rather than write
@@ -204,10 +194,9 @@ and a root is split first — importing the file whole would silently keep only 
 
 - **No CA supplied** (param unresolved, or a controller with a publicly issued certificate, or
   a plain `http://` URL). Nothing is staged, `ca-trust.pem` and `truststore.p12` are removed,
-  curl uses the OS store, and the JVM uses the JDK's own `cacerts`. Identical to the app's
-  behaviour before the param existed.
+  curl uses the OS store, and the JVM uses the JDK's own `cacerts`.
 - **CA supplied, controller uses it.** `ca-trust.pem` = OS store + chain, `truststore.p12` =
-  `cacerts` + chain; both halves verify the controller. This is the case that was failing.
+  `cacerts` + chain; both clients verify the controller.
 - **CA supplied, controller has a public certificate.** Both trust files are supersets of the
   default, so the controller verifies through the public roots and the extra anchor is simply
   unused.

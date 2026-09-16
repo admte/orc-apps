@@ -46,15 +46,8 @@ runner, and the unpacked directory it leaves behind is unconfigured. It register
 either — the node owns the service definition and generates it from `start:`, so `svc.sh
 install` and `config.cmd --runasservice` are deliberately not used.
 
-Registration is not in install because install is the phase a **pool bake** runs. A bake runs
-every app's install phase on a builder node, snapshots the disk, and destroys the builder, so
-anything install writes is shared by every clone of that image. Registering there would leave a
-dead registration on GitHub for a node that no longer exists, and — the serious half —
-`config.sh` writes `.runner` and `.credentials`, the runner's own auth material, which would
-then travel inside a pool image that lives in the registry. A clone booted from that image also
-never re-runs install (the install marker comes in with the snapshot), so it would start the
-listener under the *builder's* identity rather than its own. Registration is node identity, and
-node identity belongs in the phase that runs once per node.
+Registration happens at start, so installation leaves no runner identity or registration
+credentials in the unpacked directory.
 
 **start** (`start-github-runner.{sh,ps1}`) is a runtime-managed service: the package ships a
 start script and `artifact.yaml` names `start.service: github-runner`, and a start command that
@@ -62,9 +55,8 @@ resolves — from config or, as here, from a packaged script — together with a
 what selects runtime-managed service mode.
 
 The script registers, then becomes the listener. It looks for `.runner` in the runner
-directory, the file `config.sh` writes once a directory is configured. If it is missing — a
-fresh install, or the first boot of a clone whose baked image carried the unpacked runner but
-deliberately no identity — the script mints a fresh registration token and runs
+directory, the file `config.sh` writes once a directory is configured. If it is missing,
+the script mints a fresh registration token and runs
 `config.sh --name <hostname> --url <url> --token <fresh> --unattended --replace`
 (plus `--labels <pool>` when a pool label is set) as the service account, so the node registers
 under its **own** host name. If `.runner` is present the node already has an identity — the
