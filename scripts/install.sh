@@ -1,106 +1,65 @@
 #!/bin/sh
-# Download the `orc` CLI from github.com/admte/orc-rs releases into ./orc (repo root).
-#
-# orc-rs is a PRIVATE repo, so a GitHub token with `repo` scope is required:
-#   export GITHUB_TOKEN=$(gh auth token)     # or a PAT
+# Download the public `orc` CLI from github.com/admte/orc into ./orc (repo root).
 #
 # Usage:
-#   ./scripts/install.sh                      # latest release
-#   ORC_VERSION=v0.3.0 ./scripts/install.sh   # specific tag
+#   ./scripts/install.sh                    # latest stable release
+#   ORC_VERSION=v0.5.0 ./scripts/install.sh # specific tag
 set -eu
 
-REPO="admte/orc-rs"
+REPO="admte/orc"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 DEST="$ROOT_DIR/orc"
 
-# --- detect platform -> release asset ----------------------------------------
 os=$(uname -s)
 arch=$(uname -m)
 case "$os/$arch" in
-Darwin/arm64) asset="orc-darwin-arm64.tar.gz" ;;
-Linux/x86_64 | Linux/amd64) asset="orc-linux-amd64.tar.gz" ;;
+Darwin/arm64) asset="orc_darwin_arm64.tar.gz" ;;
+Linux/x86_64 | Linux/amd64) asset="orc_linux_amd64.tar.gz" ;;
+Linux/aarch64 | Linux/arm64) asset="orc_linux_arm64.tar.gz" ;;
 *)
-	echo "unsupported platform $os/$arch (supported: Darwin/arm64, Linux/x86_64)" >&2
-	echo "for Windows download orc-windows-amd64.zip from https://github.com/$REPO/releases" >&2
+	echo "unsupported platform $os/$arch (supported: Darwin/arm64, Linux/amd64, Linux/arm64)" >&2
+	echo "for Windows download orc_windows_amd64.zip from https://github.com/$REPO/releases" >&2
 	exit 1
 	;;
 esac
 
-# --- token (required: private repo) ------------------------------------------
-token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
-if [ -z "$token" ]; then
-	echo "GITHUB_TOKEN (or GH_TOKEN) is required to download from the private repo $REPO" >&2
-	echo "  export GITHUB_TOKEN=\$(gh auth token)" >&2
-	exit 1
-fi
-
-api_get() { curl -fsSL -H "Authorization: Bearer $token" -H "Accept: application/vnd.github+json" "$1"; }
-
-# JSON parsing via jq (preferred) or python3 — both common on dev machines and CI runners.
-if command -v jq >/dev/null 2>&1; then
-	json_field() { jq -r "$1"; }                                   # $1 = jq filter, stdin = JSON
-elif command -v python3 >/dev/null 2>&1; then
-	json_tag()  { python3 -c 'import sys,json;print(json.load(sys.stdin).get("tag_name",""))'; }
-	json_asset() { python3 -c 'import sys,json;n=sys.argv[1];print(next((a["id"] for a in json.load(sys.stdin).get("assets",[]) if a["name"]==n),""))' "$1"; }
-else
-	echo "need jq or python3 to parse the GitHub API response" >&2
-	exit 1
-fi
-
-# --- resolve release ---------------------------------------------------------
-version="${ORC_VERSION:-}"
+version=${ORC_VERSION:-}
 if [ -n "$version" ]; then
-	rel_url="https://api.github.com/repos/$REPO/releases/tags/$version"
-	release_json=$(api_get "$rel_url")
+	base_url="https://github.com/$REPO/releases/download/$version"
 else
-	# `releases/latest` excludes prereleases. The current CLI is released as a
-	# release candidate, so select the newest non-draft release with this
-	# platform's CLI asset instead.
-	rel_url="https://api.github.com/repos/$REPO/releases?per_page=100"
-	releases_json=$(api_get "$rel_url")
-	if command -v jq >/dev/null 2>&1; then
-		release_json=$(printf '%s' "$releases_json" | jq -ce --arg asset "$asset" \
-			'[.[] | select(.draft | not) | select(any(.assets[]?; .name == $asset))][0]') || {
-			echo "no release in $REPO contains $asset" >&2
-			exit 1
-		}
-	else
-		release_json=$(printf '%s' "$releases_json" | python3 -c '
-import json, sys
-asset = sys.argv[1]
-for release in json.load(sys.stdin):
-    if not release.get("draft") and any(item.get("name") == asset for item in release.get("assets", [])):
-        print(json.dumps(release))
-        break
-else:
-    raise SystemExit(f"no release contains {asset}")
-' "$asset") || exit 1
-	fi
+	base_url="https://github.com/$REPO/releases/latest/download"
 fi
-if command -v jq >/dev/null 2>&1; then
-	version=$(printf '%s' "$release_json" | json_field '.tag_name')
-	asset_id=$(printf '%s' "$release_json" | json_field ".assets[]|select(.name==\"$asset\").id")
+
+if command -v sha256sum >/dev/null 2>&1; then
+	checksum() { sha256sum "$1" | awk '{ print $1 }'; }
+elif command -v shasum >/dev/null 2>&1; then
+	checksum() { shasum -a 256 "$1" | awk '{ print $1 }'; }
 else
-	version=$(printf '%s' "$release_json" | json_tag)
-	asset_id=$(printf '%s' "$release_json" | json_asset "$asset")
+	echo "need sha256sum or shasum to verify the release" >&2
+	exit 1
 fi
-[ -n "$asset_id" ] || { echo "asset $asset not found in release $version" >&2; exit 1; }
 
-echo "Downloading $REPO $version ($asset)..." >&2
-
-# --- download (API asset endpoint works for private repos) -------------------
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
-curl -fsSL -H "Authorization: Bearer $token" -H "Accept: application/octet-stream" \
-	"https://api.github.com/repos/$REPO/releases/assets/$asset_id" -o "$tmp/$asset"
+trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+
+echo "Downloading $REPO ${version:-latest} ($asset)..." >&2
+curl -fsSL "$base_url/$asset" -o "$tmp/$asset"
+curl -fsSL "$base_url/SHA256SUMS" -o "$tmp/SHA256SUMS"
+
+expected=$(awk -v asset="$asset" '$2 == asset || $2 == "*" asset { print $1 }' "$tmp/SHA256SUMS")
+if [ -z "$expected" ] || [ "$(checksum "$tmp/$asset")" != "$expected" ]; then
+	echo "checksum verification failed for $asset" >&2
+	exit 1
+fi
+
 tar -xzf "$tmp/$asset" -C "$tmp"
+if [ ! -f "$tmp/orc" ]; then
+	echo "no 'orc' binary in $asset" >&2
+	exit 1
+fi
 
-bin=$(find "$tmp" -type f -name orc | head -n1)
-[ -n "$bin" ] || { echo "no 'orc' binary in $asset" >&2; exit 1; }
-
-mv "$bin" "$DEST"
+mv "$tmp/orc" "$DEST"
 chmod +x "$DEST"
-
 echo "Installed orc -> $DEST" >&2
 "$DEST" version

@@ -11,14 +11,15 @@ permissions:
 jobs:
   build:
     name: Build apps
-    runs-on: precision32c16m
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - name: Install orc
-        # orc-cli is a private repo; GH_TOKEN secret is a PAT with read access to admte/orc-cli.
         run: ./scripts/install.sh
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          ORC_VERSION: v0.5.0
       - name: Build every app (validates artifact.yaml + config schema)
         run: |
           for dir in apps/*/; do

@@ -2,7 +2,7 @@
 
 Source repository for ORC application artifacts published to `ghcr.io/admte/<app>`.
 
-Each app is packaged as an OCI artifact per [orc-server spec 030](https://github.com/admte/orc-server/blob/main/specs/030-apps-contract.md) (`application/vnd.orc8r.app.v1`) using the [`orc`](https://github.com/admte/orc-cli) CLI.
+Each app is packaged as an OCI artifact (`application/vnd.orc8r.app.v1`) using the public [orc CLI](https://github.com/admte/orc).
 
 This repo holds app **sources** (config, lifecycle scripts, helper binaries) as one
 `artifact.yaml` recipe per app. orc-agent pulls the published artifacts in production.
@@ -30,9 +30,9 @@ apps/
   github-runner/
     artifact.yaml          # GitHub Actions self-hosted runner
     install/stop/stopped scripts for unix + windows
-scripts/install.sh         # downloads the orc CLI into ./orc
+scripts/install.sh         # downloads and verifies the public orc CLI into ./orc
 scripts/build-and-push-github-runner.sh
-.github/workflows/ci.yml   # validate on PR, publish on <app>/<version> tags
+.github/workflows/ci.yml   # validate recipes on PRs and pushes to main
 ```
 
 Each app is a directory under `apps/` containing an `artifact.yaml`. There are no more
@@ -64,7 +64,7 @@ is the tag (defaulting to `default`). Pass `--tag` to override.
 ## Workflow
 
 ```bash
-# 1. install the orc CLI into ./orc (gitignored)
+# 1. install the public orc CLI into ./orc (gitignored; no GitHub token needed)
 ./scripts/install.sh
 
 # 2. authenticate to the registry (once)
@@ -112,9 +112,9 @@ low-level, one-platform extract.
 
 - **PRs / pushes:** every `apps/*/` is built to validate `artifact.yaml` and the config schema,
   then the embedded recipe referrer is checked to be byte-identical to the source `artifact.yaml`
-  (the `orc clone` round-trip). CI installs the latest orc release.
-- **Release:** push a tag `<app>/<version>` (e.g. `shell/1.0.1`) to build and push that app to
-  `ghcr.io/admte/<app>:<version>,default`.
+  (the `orc clone` round-trip). CI uses GitHub-hosted runners and installs the public CLI
+  version pinned by `ORC_VERSION` in the workflow. No private-repository token is required.
+- **Publishing:** use the build/push commands above. CI validates packages without publishing them.
 
 ## Apps
 
@@ -141,6 +141,11 @@ low-level, one-platform extract.
 
 ## Related repos
 
-- **orc-cli** - the `orc` CLI used to build/push/pull/run apps
-- **orc-rs** - Rust core (`orc-app`) the CLI builds on
-- **orc-server** - orchestrator runtime and app contract specs
+- **[orc](https://github.com/admte/orc)** - the public orc CLI and shared `orc-app` runtime
+
+## License
+
+[MIT](LICENSE) — Copyright (c) 2026 ADM Tech LLC and ORC8R Contributors.
+
+This license covers the recipes, scripts, and other original content in this repository.
+Applications downloaded by these recipes retain their own licenses and terms.
