@@ -3,8 +3,7 @@ $ErrorActionPreference = 'Stop'
 if (-not $env:APP_VERSION) {
 	throw 'java uninstall: APP_VERSION is required'
 }
-if ($env:APP_VERSION -notmatch '^8u\d+-b\d+$' -and
-	$env:APP_VERSION -notmatch '^\d+\.\d+\.\d+_\d+$') {
+if ($env:APP_VERSION -notmatch '^\d+\.\d+\.\d+$') {
 	throw "java uninstall: invalid APP_VERSION: $env:APP_VERSION"
 }
 

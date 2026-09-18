@@ -6,9 +6,9 @@ fail() {
 	exit 1
 }
 
-case "${APP_VERSION:-}" in
-26.0.2_10 | 25.0.4_7 | 21.0.12_8 | 17.0.20_8 | 11.0.32_9 | 8u502-b07) ;;
-*) fail "unsupported APP_VERSION: ${APP_VERSION:-<empty>}" ;;
+[ -n "${APP_VERSION:-}" ] || fail "APP_VERSION is required"
+case "$APP_VERSION" in
+'' | *[!0-9.]* | .* | *..* | *.) fail "invalid APP_VERSION: $APP_VERSION" ;;
 esac
 command -v curl >/dev/null 2>&1 || fail "curl is required"
 command -v tar >/dev/null 2>&1 || fail "tar is required"
@@ -19,17 +19,21 @@ aarch64 | arm64) arch=aarch64 ;;
 *) fail "unsupported architecture: $(uname -m)" ;;
 esac
 
-case "$APP_VERSION" in
-8u*-b*) release="jdk$APP_VERSION" ;;
-*_*)
-	version_base=${APP_VERSION%_*}
-	build=${APP_VERSION##*_}
-	release="jdk-$version_base+$build"
-	;;
-*) fail "unsupported Temurin version format: $APP_VERSION" ;;
+api=https://api.adoptium.net/v3
+selector="os=linux&architecture=$arch&image_type=jdk&jvm_impl=hotspot&heap_size=normal&vendor=eclipse&project=jdk"
+
+# APP_VERSION is the release; [X,X.1) resolves its newest build for this node.
+range="%5B$APP_VERSION,$APP_VERSION.1%29"
+release=$(curl -fsSL \
+	"$api/info/release_names?release_type=ga&version=$range&$selector&page_size=1&sort_method=DEFAULT&sort_order=DESC" |
+	tr -d ' \t\n' |
+	sed -n 's/.*"releases":\["\([^"]*\)".*/\1/p')
+[ -n "$release" ] || fail "Adoptium publishes no $APP_VERSION release for linux/$arch"
+case "$release" in
+jdk-* | jdk8u*) ;;
+*) fail "unexpected release name from Adoptium: $release" ;;
 esac
 
-api=https://api.adoptium.net/v3
 binary_url="$api/binary/version/$release/linux/$arch/jdk/hotspot/normal/eclipse?project=jdk"
 checksum_url="$api/checksum/version/$release/linux/$arch/jdk/hotspot/normal/eclipse?project=jdk"
 root=${JAVA_INSTALL_ROOT:-/opt/java}
@@ -68,15 +72,16 @@ for executable in "$prefix"/bin/*; do
 done
 ln -sfn "$prefix" "$root/current"
 
-version_output=$("$prefix/bin/java" -version 2>&1)
-case "$APP_VERSION" in
-8u*-b*)
-	security=${APP_VERSION#8u}
+# Java 8 reports 1.8.0_<security>.
+case "$release" in
+jdk8u*)
+	security=${release#jdk8u}
 	security=${security%%-*}
 	expected_version="1.8.0_$security"
 	;;
-*) expected_version=${APP_VERSION%_*} ;;
+*) expected_version=$APP_VERSION ;;
 esac
+version_output=$("$prefix/bin/java" -version 2>&1)
 case "$version_output" in
 *\""$expected_version\""*) printf '%s\n' "$version_output" >&2 ;;
 *) fail "installed Java version does not match $APP_VERSION: $version_output" ;;
