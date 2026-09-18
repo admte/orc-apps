@@ -7,14 +7,23 @@ their filenames.
 
 ## Versioning
 
-Adoptium release names contain `+`, which is not valid in an OCI tag. The fixed
-version list therefore replaces `+` with `_`: `21.0.12_8` maps exactly to the
-upstream release `jdk-21.0.12+8`. Java 8 keeps its upstream form, for example
-`8u502-b07`.
+Versions are discovered from
+<https://api.adoptium.net/v3/info/release_versions>, the GA index Adoptium
+publishes. Nothing is pinned in this repo: new Temurin releases appear without
+a change here.
 
-The default is the tested Temurin 25 LTS release. Updating the offered list
-requires adding a concrete Adoptium GA release after verifying it exists on all
-declared platforms.
+Adoptium's own version strings carry the build after a `+`
+(`25.0.4+7.0.LTS`), which is not valid in an OCI tag. The filter therefore
+exposes the release alone, so `25.0.4` arrives as `APP_VERSION`, and the
+installer resolves the matching release name (`jdk-25.0.4+7`) through
+`/v3/info/release_names` for the node's own OS and architecture. The version
+range `[X,X.1)` covers every build of a release without reaching the next one.
+Java 8 works the same way: `8.0.462` resolves to `jdk8u462-b08`.
+
+The API window is a single page of the 50 newest GA versions, which currently
+reaches back to Java 17; older lines are not offered. Because the filter keeps
+`latest_per: minor`, each release line contributes its newest release, and the
+newest discovered version is the default.
 
 The installer uses Adoptium's exact-version binary and checksum endpoints and
 fails if the SHA-256 does not match.
@@ -40,4 +49,10 @@ tree. Uninstall removes links only when they still belong to that version.
 
 ```bash
 ./orc build ./apps/java --output /tmp/java-oci
+```
+
+After publishing `java:default`, inspect discovered versions with:
+
+```bash
+./orc versions java
 ```

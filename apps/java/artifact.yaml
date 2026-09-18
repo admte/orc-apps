@@ -4,15 +4,16 @@ annotations:
   org.opencontainers.image.description: Eclipse Temurin JDK from Adoptium
   org.opencontainers.image.source: https://adoptium.net
 config:
-  default_version: "25.0.4_7"
   versions:
-    list:
-      - "26.0.2_10"
-      - "25.0.4_7"
-      - "21.0.12_8"
-      - "17.0.20_8"
-      - "11.0.32_9"
-      - "8u502-b07"
+    source: json
+    url: "https://api.adoptium.net/v3/info/release_versions?release_type=ga&vendor=eclipse&sort_method=DEFAULT&sort_order=DESC&page_size=50"
+    select: /versions
+    field: semver
+    filter:
+      # Adoptium appends the build after "+", which is not valid in a tag.
+      pattern: '^(?P<version>\d+\.\d+\.\d+)\+.*$'
+      latest_per: minor
+      limit: 30
 files:
   - install-java.sh
   - uninstall-java.sh

@@ -1,10 +1,14 @@
 #!/bin/sh
 set -eu
 
-case "${APP_VERSION:-}" in
-26.0.2_10 | 25.0.4_7 | 21.0.12_8 | 17.0.20_8 | 11.0.32_9 | 8u502-b07) ;;
-*)
-	echo "java uninstall: unsupported APP_VERSION: ${APP_VERSION:-<empty>}" >&2
+[ -n "${APP_VERSION:-}" ] || {
+	echo "java uninstall: APP_VERSION is required" >&2
+	exit 1
+}
+
+case "$APP_VERSION" in
+'' | *[!0-9.]* | .* | *..* | *.)
+	echo "java uninstall: invalid APP_VERSION: $APP_VERSION" >&2
 	exit 1
 	;;
 esac

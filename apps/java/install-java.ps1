@@ -3,6 +3,9 @@ $ErrorActionPreference = 'Stop'
 if (-not $env:APP_VERSION) {
 	throw 'java install: APP_VERSION is required'
 }
+if ($env:APP_VERSION -notmatch '^\d+\.\d+\.\d+$') {
+	throw "java install: invalid APP_VERSION: $env:APP_VERSION"
+}
 if (-not $env:ProgramFiles) {
 	throw 'java install: ProgramFiles is required'
 }
@@ -12,18 +15,30 @@ $architecture = switch ($env:PROCESSOR_ARCHITECTURE) {
 	'ARM64' { 'aarch64' }
 	default { throw "java install: unsupported architecture $env:PROCESSOR_ARCHITECTURE" }
 }
-if ($env:APP_VERSION -match '^8u\d+-b\d+$') {
-	$release = "jdk$($env:APP_VERSION)"
-	$security = ($env:APP_VERSION -replace '^8u', '') -replace '-b\d+$', ''
-	$expectedVersion = "1.8.0_$security"
-} elseif ($env:APP_VERSION -match '^(\d+\.\d+\.\d+)_(\d+)$') {
-	$release = "jdk-$($Matches[1])+$($Matches[2])"
-	$expectedVersion = $Matches[1]
-} else {
-	throw "java install: unsupported Temurin version format: $env:APP_VERSION"
-}
 
 $api = 'https://api.adoptium.net/v3'
+$selector = "os=windows&architecture=$architecture&image_type=jdk&jvm_impl=hotspot" +
+	'&heap_size=normal&vendor=eclipse&project=jdk'
+
+# APP_VERSION is the release; [X,X.1) resolves its newest build for this node.
+$range = [uri]::EscapeDataString("[$($env:APP_VERSION),$($env:APP_VERSION).1)")
+$names = Invoke-RestMethod -UseBasicParsing -Uri (
+	"$api/info/release_names?release_type=ga&version=$range&$selector" +
+	'&page_size=1&sort_method=DEFAULT&sort_order=DESC'
+)
+$release = @($names.releases) | Select-Object -First 1
+if (-not $release) {
+	throw "java install: Adoptium publishes no $env:APP_VERSION release for windows/$architecture"
+}
+if ($release -match '^jdk8u(\d+)-b\d+$') {
+	# Java 8 reports 1.8.0_<security>.
+	$expectedVersion = "1.8.0_$($Matches[1])"
+} elseif ($release -match '^jdk-\d+(\.\d+)*\+') {
+	$expectedVersion = $env:APP_VERSION
+} else {
+	throw "java install: unexpected release name from Adoptium: $release"
+}
+
 $binaryUrl = "$api/binary/version/$release/windows/$architecture/jdk/hotspot/normal/eclipse?project=jdk"
 $checksumUrl = "$api/checksum/version/$release/windows/$architecture/jdk/hotspot/normal/eclipse?project=jdk"
 $root = Join-Path $env:ProgramFiles 'java'
