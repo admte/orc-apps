@@ -1,0 +1,84 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: gitlab-runner
+  org.opencontainers.image.description: GitLab Runner executing CI/CD jobs for a GitLab project or group
+  org.opencontainers.image.source: https://gitlab.com/gitlab-org/gitlab-runner
+config:
+  versions:
+    source: gitlab_releases
+    url: https://gitlab.com/gitlab-org/gitlab-runner
+    filter:
+      pattern: '^v?(?P<version>\d+\.\d+\.\d+)$'
+      latest_per: minor
+      limit: 30
+  params:
+    type: object
+    required: [url, token]
+    x-ui-order: [url, token, executor]
+    properties:
+      url:
+        type: string
+        title: GitLab URL
+        description: GitLab instance the runner connects to
+        placeholder: https://gitlab.com
+      token:
+        type: string
+        title: Runner authentication token
+        description: Token of a runner created in GitLab (Settings > CI/CD > Runners); starts with glrt-
+        sensitive: true
+      executor:
+        type: string
+        title: Executor
+        description: How jobs are executed. The docker executor needs the docker app on the same node.
+        enum: [shell, docker]
+      pool:
+        type: string
+        title: Runner description
+        description: Shown next to the runner in GitLab; sourced from the pool name.
+        x-source:
+          kind: pool.name
+  # Downloads and verifies the binary and nothing else. Registration is the start
+  # phase's: a pool bake runs install alone and snapshots the disk, and a runner
+  # registered here would be written into config.toml as part of an image every
+  # clone shares.
+  install: {}
+  # Runtime-managed service: the node writes the service definition from this
+  # block, so the package never calls `gitlab-runner install`, which would
+  # register a second, competing service with the platform's own service manager.
+  # No `command` here — the packaged start-gitlab-runner.{sh,ps1} resolves per
+  # platform.
+  start:
+    service: gitlab-runner
+  # SIGQUIT is gitlab-runner's graceful shutdown: stop accepting new jobs, exit
+  # when the running ones finish. SIGTERM and SIGINT abort builds instead, so on
+  # Linux the signal is the whole drain and no stop script is shipped. Windows has
+  # no such signal, so stop-gitlab-runner.ps1 waits for the job in flight there;
+  # the hour is the cap on that wait on either platform.
+  stop:
+    signal: SIGQUIT
+    timeout: 1h
+    grace: 30s
+  # Releases the runner manager in GitLab, and only when the node is ending for good.
+  stopped:
+    timeout: 120s
+  uninstall:
+    timeout: 300s
+files:
+  - install-gitlab-runner.sh
+  - start-gitlab-runner.sh
+  - stopped-gitlab-runner.sh
+  - uninstall-gitlab-runner.sh
+  - install-gitlab-runner.ps1
+  - start-gitlab-runner.ps1
+  - stop-gitlab-runner.ps1
+  - stopped-gitlab-runner.ps1
+  - uninstall-gitlab-runner.ps1
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
+  - os: windows
+    arch: amd64
+  - os: windows
+    arch: arm64
