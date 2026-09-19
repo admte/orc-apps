@@ -4,23 +4,26 @@ Runs a GitLab Runner on the node, executing CI/CD jobs for a GitLab project,
 group or instance.
 
 ORC discovers `install-gitlab-runner`, `start-gitlab-runner`,
-`stop-gitlab-runner` (Windows only) and `stopped-gitlab-runner` by their
-filenames, so no lifecycle commands are declared in `artifact.yaml`.
+`stop-gitlab-runner`, `stopped-gitlab-runner` and `uninstall-gitlab-runner` by
+their filenames, so no lifecycle commands are declared in `artifact.yaml`.
 
 ## Settings
 
 | Setting | Required | Description |
 |---------|----------|-------------|
-| `url` | yes | GitLab instance the runner connects to, for example `https://gitlab.com` |
-| `token` | yes | Runner authentication token (`glrt-…`), delivered as a file because it is sensitive |
-| `executor` | no | `shell` (default) or `docker`; the docker executor needs the docker app on the same node |
-| `pool` | — | Filled by the platform from `pool.name` and appended to the runner description |
+| `url` | yes | Project or group URL, for example `https://gitlab.com/group/project`. The instance URL alone creates an instance runner, which needs an administrator token. |
+| `token` | yes | Access token used to create, pause and delete this node's runner; needs the `create_runner` and `manage_runner` scopes. Delivered as a file because it is sensitive. |
+| `executor` | no | `shell` (default) or `docker`; the docker executor needs the docker app on the same node. |
+| `pool` | — | Filled by the platform from `pool.name` and applied as the runner's tag. |
 
-Create the runner in GitLab first (**Settings > CI/CD > Runners > New project
-runner**), set its tags and options there, and paste the authentication token it
-gives you. Tags belong to the runner as GitLab stores it, not to this app: with
-an authentication token, `register` only attaches this node as a *runner
-manager* to a runner that already exists.
+Nothing is created in the GitLab UI beforehand: like github-runner, this app
+takes an access token and creates the runner itself, one per node, so a pool of
+five nodes is five runners that appear and disappear with them.
+
+Each runner is tagged with the pool name, so `tags: [<pool>]` in
+`.gitlab-ci.yml` routes a job to that pool — the counterpart of `runs-on:
+<pool>` on GitHub. A node whose pool name is not available takes untagged jobs
+instead, so it does not sit idle with nothing able to select it.
 
 ## Versioning
 
@@ -34,36 +37,39 @@ publishes for that exact file. A mismatch fails the install.
 
 ## Lifecycle
 
-- **install** downloads and verifies the binary and creates the `gitlab-runner`
-  account that jobs run as. It deliberately registers nothing: a pool bake runs
-  the install phase alone and snapshots the disk, so a registration made here
-  would be shared by every clone of the image.
-- **start** registers this node once — the `[[runners]]` entry in `config.toml`
-  is its identity, and a restart reuses it — then runs the runner in the
-  foreground as the platform's own service. The token is passed through the
-  environment, never as a flag, so it does not show up in the process list of
-  the jobs the runner later spawns.
-- **stop** drains. On Linux the declared `SIGQUIT` is gitlab-runner's own
-  graceful shutdown: it stops accepting jobs and exits when the running one
-  finishes. Windows has no such signal, so `stop-gitlab-runner.ps1` waits for the
-  job in flight instead. Neither path can stop GitLab from handing out one more
-  job while it waits, because taking a runner out of rotation needs an API token
-  this app is not given.
-- **stopped** unregisters, and only when `APP_STOP_REASON` is `terminate`. A
-  restart or an ordinary stop keeps the registration, because the same install
-  comes back against the same `config.toml`.
-- **uninstall** unregisters best-effort and removes that version's tree, taking
-  the `gitlab-runner` exposure with it only while it still points into that tree.
-
-Unregistering removes this node's runner *manager*. The runner itself was created
-in GitLab and stays there — delete it in the UI or through the REST API when the
-pool is gone for good.
+- **install** downloads the binary, verifies it and only then publishes it, and
+  on Linux creates the `gitlab-runner` account that jobs run as. It deliberately
+  creates no runner: a pool bake runs
+  the install phase alone and snapshots the disk, so a runner created here would
+  be baked into an image every clone shares, along with its authentication token.
+- **start** creates this node's runner through `POST /user/runners` when there is
+  none, records its id, and registers it locally; on an ordinary restart it
+  reuses the existing one and resumes it, because `stop` left it paused. The
+  runner token is passed through the environment, never as a flag, so it does not
+  show up in the process list of the jobs the runner later spawns.
+- **stop** pauses the runner through the API so the queue stops routing work
+  here, then waits for the job already running. The wait belongs to the stop
+  command on both platforms: only it gets the full `stop.timeout`, while the
+  `SIGQUIT` that follows — gitlab-runner's own graceful shutdown — is cut off
+  after `grace`, which is thirty seconds and not a build.
+- **stopped** deletes the runner, and only when `APP_STOP_REASON` is `terminate`.
+  A restart or an ordinary stop keeps it, paused, for `start` to resume.
+  `unregister` alone is not enough here: a runner created through the API
+  survives it, so the id recorded at creation is what the delete uses. The delete
+  goes first and `config.toml` is removed after it, so a node can never come back
+  up holding the token of a runner GitLab no longer has — which would look
+  healthy and never be given a job.
+- **uninstall** deletes the runner best-effort and removes that version's tree,
+  taking the `gitlab-runner` exposure with it only while it still points into
+  that tree. The runner's configuration and job trees are cleared only once the
+  last installed version is gone.
 
 ## Layout
 
 - Linux: `/opt/gitlab-runner/<version>/gitlab-runner`, symlinked into
   `/usr/local/bin`, with `/opt/gitlab-runner/current` pointing at the active
-  version. `config.toml` and `builds/` live in the app's working directory.
+  version. `config.toml`, `runner.id` and `builds/` live in the app's working
+  directory.
 - Windows: `%ProgramFiles%\gitlab-runner\<version>`, exposed through a `current`
   junction that is added to the machine `PATH`.
 

@@ -37,19 +37,24 @@ asset_checksum() {
 	python3 -c '
 import re, sys
 asset = sys.argv[1]
-page = sys.stdin.read()
+page = open(sys.argv[2]).read()
 pattern = (
     r"binaries/" + re.escape(asset) + r"</a></span>\s*"
     r"<span class=\"file_checksum\">([0-9a-f]{64})</span>"
 )
 found = re.search(pattern, page)
 print(found.group(1) if found else "")
-' "$1"
+' "$1" "$2"
 }
 
 need curl
+need id
 need python3
 need sha256sum
+# Not used here, but the start phase needs them and a bake that produced an image
+# without them would only fail at first boot.
+need hostname
+need pgrep
 [ "$(id -u)" -eq 0 ] || fail "must run as root"
 
 [ -n "${APP_VERSION:-}" ] || fail "APP_VERSION is required"
@@ -69,29 +74,46 @@ root=${GITLAB_RUNNER_INSTALL_ROOT:-/opt/gitlab-runner}
 bin_dir=${GITLAB_RUNNER_BIN_DIR:-/usr/local/bin}
 prefix="$root/$APP_VERSION"
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT HUP INT TERM
+# A signal handler that only cleans up would return and let the script carry on
+# with its work directory deleted, reporting a successful install of a phase the
+# runtime cancelled; these exit instead.
+trap 'rm -rf "$work"' EXIT
+trap 'rm -rf "$work"; exit 1' HUP INT TERM
 
 ensure_service_user
 
 note "downloading the runner version=$APP_VERSION asset=$asset"
 curl -fsSL "$base/binaries/$asset" -o "$work/$asset" ||
 	fail "no GitLab Runner $APP_VERSION build for linux/$arch"
-expected=$(curl -fsSL "$base/index.html" | asset_checksum "$asset")
+curl -fsSL "$base/index.html" -o "$work/index.html" ||
+	fail "could not read the release index for v$APP_VERSION"
+expected=$(asset_checksum "$asset" "$work/index.html")
 [ -n "$expected" ] || fail "no published checksum for $asset in release v$APP_VERSION"
 actual=$(sha256sum "$work/$asset" | awk '{ print $1 }')
 [ "$actual" = "$expected" ] ||
 	fail "checksum verification failed asset=$asset expected=$expected actual=$actual"
 
+# Checked before anything is published: a binary that fails here must not be left
+# behind the `current` pointer and the symlink an already-working version owns.
+chmod 0755 "$work/$asset"
+version_output=$("$work/$asset" --version) ||
+	fail "the downloaded runner does not run"
+case "$version_output" in
+*"Version:"*"$APP_VERSION"*) ;;
+*) fail "the downloaded runner does not report $APP_VERSION: $version_output" ;;
+esac
+
 install -D -m 0755 "$work/$asset" "$prefix/gitlab-runner"
 mkdir -p "$bin_dir"
 ln -sfn "$prefix/gitlab-runner" "$bin_dir/gitlab-runner"
+# ln -sfn into an existing *directory* would create current/current rather than
+# replace it, and every later current/gitlab-runner lookup would miss.
+if [ -d "$root/current" ] && [ ! -L "$root/current" ]; then
+	fail "$root/current is a directory, not a symlink"
+fi
 ln -sfn "$prefix" "$root/current"
 
-version_output=$("$prefix/gitlab-runner" --version)
-case "$version_output" in
-*"Version:"*"$APP_VERSION"*) note "installed version=$APP_VERSION dir=$prefix user=$SERVICE_USER" ;;
-*) fail "installed runner does not report $APP_VERSION: $version_output" ;;
-esac
+note "installed version=$APP_VERSION dir=$prefix user=$SERVICE_USER"
 
 # Nothing below this point may create node identity. A pool bake runs the install
 # phase alone and snapshots the disk, so a `register` here would put one runner
