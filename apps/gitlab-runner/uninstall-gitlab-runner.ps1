@@ -1,11 +1,30 @@
 $ErrorActionPreference = 'Stop'
 
 # Removal of the app itself. The runner has already stopped, and the stopped hook
-# released the registration when the node was terminating; releasing again here is
+# deleted it from GitLab when the node was terminating; deleting again here is
 # best-effort, for the case where the app is taken off a node that keeps running.
 
 function Write-Note($message) {
 	Write-Host "gitlab-runner uninstall: $message"
+}
+
+function Get-TokenValue {
+	if ($env:TOKEN_FILE) {
+		return (Get-Content -Raw -LiteralPath $env:TOKEN_FILE).Trim()
+	}
+	if ($env:TOKEN) {
+		return $env:TOKEN.Trim()
+	}
+	return $null
+}
+
+function Get-RunnerId($path) {
+	if (-not (Test-Path -LiteralPath $path)) { return $null }
+	$value = Get-Content -Raw -LiteralPath $path
+	if (-not $value) { return $null }
+	$value = $value.Trim()
+	if (-not $value) { return $null }
+	return $value
 }
 
 if (-not $env:APP_VERSION) {
@@ -18,15 +37,26 @@ if ($env:APP_VERSION -notmatch '^\d+\.\d+\.\d+$') {
 $root = Join-Path $env:ProgramFiles 'gitlab-runner'
 $prefix = Join-Path $root $env:APP_VERSION
 $current = Join-Path $root 'current'
-$runner = Join-Path $prefix 'gitlab-runner.exe'
-$config = Join-Path (Join-Path (Get-Location) 'gitlab-runner') 'config.toml'
+$workDir = Join-Path (Get-Location) 'gitlab-runner'
+$config = Join-Path $workDir 'config.toml'
+$idFile = Join-Path $workDir 'runner.id'
 
-if ((Test-Path -LiteralPath $runner -PathType Leaf) -and (Test-Path -LiteralPath $config)) {
-	& $runner unregister --config $config --all-runners
-	if ($LASTEXITCODE -eq 0) {
-		Write-Note 'runner unregistered'
+$deleted = $false
+$runnerId = Get-RunnerId $idFile
+if ($runnerId) {
+	$token = Get-TokenValue
+	if (-not $token -or -not $env:URL -or -not $env:URL.StartsWith('https://')) {
+		Write-Note "no usable URL or access token; leaving the runner in GitLab id=$runnerId"
 	} else {
-		Write-Note 'could not unregister; removing the install anyway'
+		$uri = [uri]$env:URL
+		try {
+			Invoke-RestMethod -Method Delete -Headers @{ 'PRIVATE-TOKEN' = $token } `
+				-Uri "$($uri.Scheme)://$($uri.Authority)/api/v4/runners/$runnerId" | Out-Null
+			$deleted = $true
+			Write-Note "runner deleted id=$runnerId"
+		} catch {
+			Write-Note "could not delete the runner; removing the install anyway id=$runnerId"
+		}
 	}
 }
 
@@ -35,9 +65,12 @@ if ((Test-Path -LiteralPath $runner -PathType Leaf) -and (Test-Path -LiteralPath
 if (Test-Path -LiteralPath $current) {
 	$item = Get-Item -LiteralPath $current -Force
 	if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-		$target = [IO.Path]::GetFullPath([string]$item.Target).TrimEnd('\')
-		if ($target -eq [IO.Path]::GetFullPath($prefix).TrimEnd('\')) {
-			[IO.Directory]::Delete($current)
+		$target = @($item.Target) | Select-Object -First 1
+		if ($target) {
+			$target = ([string]$target).TrimEnd('\')
+			if ($target -eq $prefix.TrimEnd('\')) {
+				[IO.Directory]::Delete($current)
+			}
 		}
 	}
 }
@@ -53,6 +86,14 @@ if ((Test-Path -LiteralPath $root) -and -not (Test-Path -LiteralPath $current)) 
 		})
 		[Environment]::SetEnvironmentVariable('Path', $entries -join ';', 'Machine')
 		Remove-Item -LiteralPath $root -Force
+		# The app's own state goes only once the last version is gone, so removing
+		# one of two installed versions does not disarm the one still running.
+		if ($deleted) {
+			Remove-Item -LiteralPath $idFile -Force -ErrorAction SilentlyContinue
+		}
+		Remove-Item -LiteralPath $config -Force -ErrorAction SilentlyContinue
+		Remove-Item -LiteralPath (Join-Path $workDir 'builds') -Recurse -Force -ErrorAction SilentlyContinue
+		Write-Note 'removed the last version; cleared the runner configuration'
 	}
 }
 

@@ -49,6 +49,13 @@ try {
 		throw "gitlab-runner install: checksum verification failed asset=$asset expected=$expected actual=$actual"
 	}
 
+	# Checked before anything is published: a binary that fails here must not be
+	# left behind the `current` junction an already-working version owns.
+	$versionOutput = & $binary --version | Out-String
+	if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch [regex]::Escape($env:APP_VERSION)) {
+		throw "gitlab-runner install: the downloaded runner does not report $($env:APP_VERSION): $versionOutput"
+	}
+
 	New-Item -ItemType Directory -Path $prefix -Force | Out-Null
 	Copy-Item -LiteralPath $binary -Destination (Join-Path $prefix 'gitlab-runner.exe') -Force
 
@@ -63,7 +70,8 @@ try {
 
 	$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
 	$entries = @($machinePath -split ';' | Where-Object { $_ })
-	if ($current -notin $entries) {
+	$normalized = @($entries | ForEach-Object { $_.TrimEnd('\') })
+	if ($current.TrimEnd('\') -notin $normalized) {
 		[Environment]::SetEnvironmentVariable(
 			'Path',
 			(@($entries) + $current) -join ';',
@@ -71,15 +79,11 @@ try {
 		)
 	}
 
-	$versionOutput = & (Join-Path $prefix 'gitlab-runner.exe') --version | Out-String
-	if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch [regex]::Escape($env:APP_VERSION)) {
-		throw "gitlab-runner install: installed runner does not report $($env:APP_VERSION): $versionOutput"
-	}
 	Write-Host "gitlab-runner install: installed version=$($env:APP_VERSION) dir=$prefix"
 } finally {
 	Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # Nothing above registers the runner. A pool bake runs the install phase alone and
-# snapshots the disk, so a registration made here would be shared by every clone
-# of the image; start-gitlab-runner.ps1 does it once per node.
+# snapshots the disk, so a runner created here would be shared by every clone of
+# the image; start-gitlab-runner.ps1 creates it once per node.
