@@ -1,0 +1,88 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: azure-pipelines-agent
+  org.opencontainers.image.description: Azure Pipelines self-hosted agent
+  org.opencontainers.image.source: https://github.com/microsoft/azure-pipelines-agent
+config:
+  params:
+    type: object
+    required: [url, token]
+    x-ui-order: [url, token, agent_pool]
+    properties:
+      url:
+        type: string
+        title: Organization URL
+        description: Azure DevOps organization the agent registers with
+        placeholder: https://dev.azure.com/myorganization
+      token:
+        type: string
+        title: Personal access token
+        description: PAT used to register, disable and remove this node's agent; needs the Agent Pools (read, manage) scope
+        sensitive: true
+        # Declared rather than left to the default, which varies by type: a
+        # sensitive param with `startup` lifetime is withdrawn once the app has
+        # started, and this one is read after that — by stop, to disable the
+        # agent, and by stopped, to remove it once the agent host has exited.
+        lifetime: runtime
+      agent_pool:
+        type: string
+        title: Agent pool
+        description: Azure DevOps agent pool to join. Defaults to the ORC pool's own name, and the pool must already exist.
+        placeholder: Default
+      pool:
+        type: string
+        title: ORC pool name
+        description: Used as the agent pool name when one is not given; sourced from the pool name.
+        x-source:
+          kind: pool.name
+  # No `versions` block: an Azure Pipelines agent updates itself when the service
+  # asks it to, so pinning a version here would be overwritten from the outside —
+  # the same reason github-runner declares none. The installer takes whatever
+  # release the project currently publishes.
+  #
+  # Downloads and unpacks the agent and nothing else. Registration is the start
+  # phase's, because a pool bake runs install alone and snapshots the disk: an
+  # identity minted here would be baked into a shared image along with the
+  # agent's `.credentials`.
+  #
+  # The agent package is a few hundred megabytes, which the 600s default can be
+  # tight for on a slow link.
+  install:
+    timeout: 1200s
+  # Runtime-managed service: the node writes the service definition from this
+  # block, so the package never calls svc.sh install. No `command` here — the
+  # packaged start-azure-pipelines-agent.{sh,ps1} resolves per platform, and a
+  # start command that resolves plus a `service` name is what selects
+  # runtime-managed service mode.
+  start:
+    service: azure-pipelines-agent
+  # stop-azure-pipelines-agent disables the agent through the API and waits for
+  # the job in flight, so the hour is the cap on that wait; `grace` would be
+  # otherwise, and thirty seconds is not a build. SIGINT is what the agent host
+  # reads as "finish and exit", so it is the signal the service definition carries.
+  stop:
+    signal: SIGINT
+    timeout: 1h
+    grace: 30s
+  # Releases the Azure DevOps registration, and only when the node is ending for
+  # good.
+  stopped:
+    timeout: 120s
+files:
+  - install-azure-pipelines-agent.sh
+  - start-azure-pipelines-agent.sh
+  - stop-azure-pipelines-agent.sh
+  - stopped-azure-pipelines-agent.sh
+  - install-azure-pipelines-agent.ps1
+  - start-azure-pipelines-agent.ps1
+  - stop-azure-pipelines-agent.ps1
+  - stopped-azure-pipelines-agent.ps1
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
+  - os: windows
+    arch: amd64
+  - os: windows
+    arch: arm64
