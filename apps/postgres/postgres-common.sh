@@ -2,12 +2,14 @@
 # Shared definitions for the postgres app. Sourced, never executed.
 #
 # Layout on the node:
-#   /var/lib/orc-postgres/primary   the persisted root; slot 1 keeps its cluster in
-#                                   primary/pgdata. Captured and restored by the platform.
+#   /var/lib/orc-postgres/primary   the durable root; the writer keeps its cluster in
+#                                   primary/pgdata. This is the only directory worth
+#                                   backing up, and the only one a deployment that
+#                                   snapshots app data needs to capture.
 #   /var/lib/orc-postgres/replica   a replica's cluster, rebuilt from the writer on every
-#                                   start. Never captured: it is a copy of slot 1.
-#   /var/lib/orc-postgres/tls       the postgres account's copies of the platform TLS
-#                                   material, re-staged on every start.
+#                                   start. Never worth capturing: it is a copy of the writer.
+#   /var/lib/orc-postgres/tls       the postgres account's copies of the certificates and
+#                                   keys the server uses, re-staged on every start.
 
 PG_MAJOR=${PG_MAJOR:-17}
 PG_BIN=${PG_BIN:-/usr/lib/postgresql/$PG_MAJOR/bin}
@@ -21,10 +23,16 @@ PRIMARY_PGDATA="$PRIMARY_ROOT/pgdata"
 REPLICA_PGDATA="$APP_ROOT/replica/pgdata"
 TLS_DIR="$APP_ROOT/tls"
 
-# Every DB role and map name the recipe owns. The replication role has no password:
-# it is reachable only with a platform-issued client certificate.
+# Every DB role and map name the recipe owns. The replication role has no password: it
+# is reachable only by presenting a client certificate the configured CA issued.
 REPLICATION_ROLE=replicator
-IDENT_MAP=orc
+IDENT_MAP=certmap
+
+# Which node is the writer. A deployment tells its nodes apart by SLOT, a 1-based
+# number that is stable for the life of a node; node 1 is the writer and every other
+# node streams from it. A single node has no one to tell apart, so SLOT defaults to 1
+# and that node is the writer.
+PG_SLOT=${SLOT:-1}
 
 pg_note() {
 	echo "postgres $PG_PHASE: $*" >&2
@@ -39,9 +47,9 @@ pg_need() {
 	command -v "$1" >/dev/null 2>&1 || pg_fail "$1 is required"
 }
 
-# Runs a command as the postgres account inside the same session, so a server
-# started this way stays the service's own process and the stop signal reaches it.
-# setpriv, never su or runuser (spec: those detach the child into a new session).
+# Runs a command as the postgres account inside the same session, so a server started
+# this way stays the service's own process and the stop signal reaches it. setpriv,
+# never su or runuser: those start a new session, where the signal no longer lands.
 pg_as_postgres() {
 	setpriv --reuid="$PG_OS_USER" --regid="$PG_OS_USER" --init-groups \
 		env HOME=/var/lib/postgresql PATH="$PG_BIN:/usr/bin:/bin" "$@"
@@ -52,7 +60,6 @@ pg_running() {
 	pg_as_postgres "$PG_BIN/pg_ctl" status -D "$1" >/dev/null 2>&1
 }
 
-# Whether the node holds slot 1, which is the writer by the platform's convention.
 pg_is_writer() {
-	[ "${SLOT:-}" = "1" ]
+	[ "$PG_SLOT" = "1" ]
 }
