@@ -135,7 +135,7 @@ low-level, one-platform extract.
 | github-runner | draft | GitHub Actions self-hosted runner as a managed service; drains the in-flight job on stop; linux + windows |
 | jenkins-agent | draft | Jenkins Swarm agent as a managed service; drains the in-flight build on stop; linux + windows |
 | terraform | draft | Terraform CLI from HashiCorp Releases; version-scoped install; linux only |
-| postgres | draft | PostgreSQL 17 as a managed service; slot 1 is the writer with persisted data, other slots stream from it; TLS only, cert-authenticated replication; linux only |
+| postgres | draft | PostgreSQL 17 as a managed service; one node is the writer, further nodes stream from it; TLS-only listener, cert-authenticated replication; linux only |
 
 ## Related repos
 

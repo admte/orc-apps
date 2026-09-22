@@ -1,116 +1,185 @@
 # postgres
 
-PostgreSQL 17 as a runtime-managed service, one cluster per node. The pool's runtime slot
-decides a node's role: **slot 1 is the writer** and keeps its data in the persisted root;
-every other slot is a **streaming replica** that rebuilds itself from the writer on each
-start. Clients that resolve the pool's bare name reach the writer; slot names reach
-individual replicas for reads.
+PostgreSQL 17 as a managed service. One node holds the data and takes writes; add more
+nodes and each one streams from it as a hot standby.
 
-```text
-postgres/
-  artifact.yaml
-  postgres-common.sh       shared paths and helpers; sourced by the scripts below
-  install-postgres.sh      packages from the PGDG apt repository
-  start-postgres.sh        TLS staging, initdb or seed, role reconciliation, exec postgres
-  hook-pre-postgres.sh     CHECKPOINT before each capture of the persisted root
+Nodes are told apart by a number: **node 1 is the writer**, and every other node is a
+replica that rebuilds itself from the writer on each start. A single node is node 1, so
+one node needs no configuration beyond a password.
+
+## Quick start
+
+One node, on a Debian or Ubuntu host:
+
+```bash
+printf 'choose-a-password' | sudo tee /root/pg.password >/dev/null
+sudo chmod 600 /root/pg.password
+
+sudo orc install postgres --password=@/root/pg.password
+sudo orc start postgres
 ```
 
-`install` and `start` resolve from the package by name; `hook_pre` names its script
-explicitly, because capture hooks have no naming convention. `linux/amd64` and
-`linux/arm64`, Debian and Ubuntu.
+That installs PostgreSQL 17, creates a cluster, creates the `app` role and the `app`
+database, generates a server certificate, and runs the server. Connections are encrypted
+from the first one: the listener is TLS-only and plain TCP is refused.
+
+```bash
+# from another host
+psql "host=<this-host> user=app dbname=app sslmode=require"
+
+# on the node itself
+sudo -u postgres psql                       # superuser, over the Unix socket
+psql -h /var/run/postgresql -U app -d app   # the application role
+```
+
+Sensitive parameters must be passed as a file (`--password=@<path>`) or a secret URI,
+never as a literal on the command line. `orc start` reuses the parameters given to
+`orc install`, so they are only typed once. `orc status postgres`, `orc stop postgres`,
+and `orc uninstall postgres` do what they say.
+
+The generated certificate is self-signed, so `sslmode=require` encrypts but verifies
+nothing. Supply your own certificate and CA to get a verifiable one — see
+[TLS and trust](#tls-and-trust).
 
 ## Parameters
 
-- `password` - **required**, sensitive. The application role's password. Clients present
-  it with SCRAM over TLS.
+Required:
+
+- `password` - the application role's password, presented over TLS with SCRAM.
+
+Optional, with defaults:
+
 - `app_user` - the application role, default `app`.
 - `app_db` - the application database, owned by `app_user`, default `app`.
 - `max_connections` - PostgreSQL `max_connections`, default `100`.
 
-Everything else is filled in by the platform and hidden from operators: the node's slot
-(`pool.slot`), the pool name (`pool.name`, used as `cluster_name` and in the replica's
-`application_name`), the writer's internal name (`peers.first`), the project CA bundle
-(`ca.bundle`), a server certificate and key (`tls.cert` with purpose `server_tls`), and a
-client certificate and key (`tls.cert` with purpose `client_mtls`) that identify a replica
-towards the writer.
+Optional, and only needed for more than one node or for verifiable TLS:
+
+- `slot` - this node's number, 1-based and stable for its life. Default `1`.
+- `pool` - a name shared by the nodes of one database; used as `cluster_name` in logs.
+- `writer` - the host name of node 1. Required on a replica.
+- `ca` - PEM chain of the CA that issued the certificates below. Supplying it is what
+  turns replication on.
+- `server_cert`, `server_key` - the certificate the listener presents.
+- `client_cert`, `client_key` - a replica's identity towards the writer. Required on a
+  replica.
 
 There is deliberately **no superuser password**. The `postgres` role has none and is
-reachable only over the Unix socket with peer authentication, so DBA work is a shell on the
-node: `sudo -u postgres psql`. Both the superuser and the replication role are rejected
-over the network before any other rule in `pg_hba.conf`.
+reachable only over the Unix socket, so administration is a shell on the node. Both the
+superuser and the replication role are refused over the network ahead of every other
+rule.
+
+## Running more than one node
+
+Replication is authenticated by certificate, so it needs a CA whose certificates the
+nodes present to each other. Issue a server certificate per node, valid for the name
+other nodes will dial it by, and one client certificate per replica.
+
+On node 1:
+
+```bash
+sudo orc install postgres \
+  --password=@/root/pg.password \
+  --slot=1 --pool=db \
+  --ca=@/etc/pki/ca.pem \
+  --server-cert=@/etc/pki/node1.crt --server-key=@/etc/pki/node1.key
+sudo orc start postgres
+```
+
+On node 2:
+
+```bash
+sudo orc install postgres \
+  --password=@/root/pg.password \
+  --slot=2 --pool=db --writer=node1.example.com \
+  --ca=@/etc/pki/ca.pem \
+  --server-cert=@/etc/pki/node2.crt --server-key=@/etc/pki/node2.key \
+  --client-cert=@/etc/pki/node2-client.crt --client-key=@/etc/pki/node2-client.key
+sudo orc start postgres
+```
+
+Node 2 discards whatever it had, runs `pg_basebackup` against the writer with
+`sslmode=verify-full`, and follows it as a hot standby. A replica started before its
+writer retries for up to 30 minutes, so the order you start them in does not matter.
+
+**Any client certificate the CA issued may replicate.** The writer maps every
+certificate that CA signed onto the replication role; which certificates exist is the
+CA's business. Use a CA scoped to this database, not a company-wide one.
+
+Writes go to node 1. Replicas are read-only, and there is no automatic failover: if node
+1 is lost, its replacement restores node 1's data and takes over. Replicas are not
+promoted.
+
+## TLS and trust
+
+The listener is always TLS. `pg_hba.conf` has no plain `host` rule, only `hostssl`, so
+an unencrypted network connection is refused rather than downgraded.
+
+| Supplied | Listener certificate | Clients should use |
+|---|---|---|
+| nothing | generated once, self-signed, reused across restarts | `sslmode=require` |
+| `server_cert` + `server_key` + `ca` | yours | `sslmode=verify-full sslrootcert=<ca>` |
+
+Certificates are re-staged on every start, so renewing one is a restart. Switching
+between a supplied certificate and a generated one works in both directions: the app
+never keeps serving a certificate that is no longer supplied.
 
 ## Where things live
 
 | | Path |
 |---|---|
-| Persisted root (slot 1 only) | `/var/lib/orc-postgres/primary` |
+| Durable root (the writer's data) | `/var/lib/orc-postgres/primary` |
 | Writer cluster (`PGDATA`) | `/var/lib/orc-postgres/primary/pgdata` |
-| Replica cluster (`PGDATA`, never captured) | `/var/lib/orc-postgres/replica/pgdata` |
-| Staged TLS material | `/var/lib/orc-postgres/tls/{ca.pem,server.crt,server.key,client.crt,client.key}` |
+| Replica cluster (`PGDATA`, disposable) | `/var/lib/orc-postgres/replica/pgdata` |
+| Certificates and keys | `/var/lib/orc-postgres/tls` |
 | Managed settings | `$PGDATA/conf.d/orc.conf`, `$PGDATA/pg_hba.conf`, `$PGDATA/pg_ident.conf` |
 | Socket | `/var/run/postgresql` |
 | Binaries | `/usr/lib/postgresql/17/bin` |
 | Runs as | the `postgres` system account |
 
-The managed files are rewritten on every start; local edits to them do not survive a
-restart. Anything else in `postgresql.conf` or `postgresql.auto.conf` is left alone.
+The managed files are rewritten on every start; edits to them do not survive a restart.
+Anything else in `postgresql.conf` or `postgresql.auto.conf` is left alone.
+
+Only the durable root is worth backing up. A replica's cluster is a copy of the writer
+and is thrown away and rebuilt on each start, so it is deliberately kept outside it.
 
 ## Lifecycle
 
 **install** adds the PGDG apt repository, turns off `postgresql-common`'s automatic
 `main` cluster, installs `postgresql-17` and `postgresql-client-17`, and disables the
-packaged `postgresql` umbrella unit. It writes no data, no secret and no node identity,
-so a pool bake can run it alone and snapshot the disk.
+packaged `postgresql` umbrella unit. It writes no data, no secret, and no node identity,
+so the result is identical on every node and safe to snapshot into a machine image.
 
-**start** stages the platform's TLS material into the postgres account's own directory
-(the runtime's copies are unreadable to the database user, and certificates are short-lived,
-so this happens on every start). Then, by slot:
+**start** stages the certificates into the postgres account's own directory, then, by
+node number:
 
-- *Slot 1* takes ownership of the persisted root. An empty root gets `initdb` with data
-  checksums and no superuser password; an existing cluster is checked to be version 17 and a
-  stale `postmaster.pid` is cleared. The script writes the managed settings, starts a
-  socket-only postmaster, creates the replication role and the application role if they are
-  missing, sets the application password, creates the application database if it is missing,
-  stops that postmaster, and `exec`s the real one. Because the reconciliation runs every
-  start, an edited `password` or `max_connections` takes effect on the restart the edit
-  triggers.
-- *Any other slot* discards its previous cluster and runs `pg_basebackup -R` against the
-  writer's slot name with `sslmode=verify-full`, retrying for up to 30 minutes while the
-  writer is not yet reachable. The writer's name answers empty until a slot-1 member is
-  online, so a replica started first simply waits. It then writes the managed settings and
-  `exec`s the postmaster as a hot standby.
+- *Node 1* creates the cluster if the durable root is empty (`initdb`, data checksums, no
+  superuser password) or adopts the one already there, refusing a cluster from another
+  major version. It writes the managed settings, then creates the replication role, the
+  application role and the application database on a socket-only postmaster, sets the
+  application password, and `exec`s the real server. Because that runs on every start, an
+  edited `password` or `max_connections` takes effect on the restart the edit triggers.
+  A start with no password supplied and a cluster already present leaves the roles alone
+  rather than failing, so a bare service restart after the parameter file is withdrawn
+  does not turn into a crash loop.
+- *Any other node* discards its previous cluster, seeds from the writer with
+  `pg_basebackup -R`, and `exec`s the server as a hot standby.
 
-**stop** is `SIGINT`, PostgreSQL's fast shutdown, with a 120s grace before the kill. A
+**stop** is `SIGINT` — PostgreSQL's fast shutdown — with a 120s grace before the kill. A
 kill past the grace costs crash recovery on the next start, never committed data.
 
-**hook_pre** runs before each capture of the persisted root. On slot 1 with a running
-postmaster it issues `CHECKPOINT` and `sync`, so the snapshot's recovery replay is short; on
-a replica or a stopped writer it only syncs. A failed checkpoint skips that capture.
+**hook_pre** runs before a capture of the durable root, for deployments that snapshot app
+data. On the writer it issues `CHECKPOINT` and `sync`, so a restored cluster has little
+WAL to replay; elsewhere it only syncs. A failed checkpoint skips that capture rather than
+taking an inconsistent one.
 
-## Replication and trust
+## Automatic configuration
 
-Replication is authenticated by certificate alone. The platform issues every node's
-client certificate with the subject `ORC mTLS client` from the project's CA, and
-`pg_ident.conf` maps that subject onto the `replicator` role for `hostssl replication`
-connections. Any node holding a certificate from the project CA can therefore stream from
-the writer, and nothing else can: the role has no password. The replica verifies the writer
-against the project CA bundle, and the writer's certificate carries its slot name, which is
-exactly the name `peers.first` resolved to.
-
-WAL is retained by size (`wal_keep_size = 1GB`) rather than by replication slot. A replica
-rebuilds itself from scratch on every start anyway, and a slot left behind by a dead
-replica would fill the writer's disk.
-
-## Failure and scale
-
-- A shrink ends the highest slot first, so slot 1 survives until the pool is empty.
-- If the slot-1 node is lost, the platform replaces it and the replacement restores the
-  persisted root into slot 1. There is no promotion of a replica; replicas stay read-only and
-  re-seed from the restored writer.
-- Restore points are crash-consistent snapshots. A restored writer replays WAL from its last
-  checkpoint on start.
-- The writer does not upgrade a cluster in place: a persisted root from another major
-  version is refused with a message.
+Every parameter above can be passed by hand, which is what the examples do. The optional
+ones additionally carry an `x-source` annotation, so an orchestrator that understands
+those kinds can fill them in for you — the node's number, the writer's address, the CA,
+and a certificate and key per node — and you supply only the password. That is a
+convenience, not a requirement: nothing in the app depends on it.
 
 ## Build + Push
 
@@ -126,28 +195,17 @@ Validate locally without pushing:
 ./orc build ./apps/postgres --output /tmp/postgres-oci
 ```
 
-## Manual test
+## Running the phases by hand
 
-Requires root on a Debian or Ubuntu host and PEM files standing in for what the platform
-delivers:
+The lifecycle scripts are ordinary shell and take their input from the environment, which
+is useful when debugging a node:
 
 ```bash
 sudo sh install-postgres.sh
-
-# the writer
-printf 'secret' > /tmp/pw
-sudo env SLOT=1 POOL=db APP_USER=app APP_DB=app MAX_CONNECTIONS=100 \
-  PASSWORD_FILE=/tmp/pw CA_FILE=/path/ca.pem \
-  SERVER_CERT_FILE=/path/server.crt SERVER_KEY_FILE=/path/server.key \
-  sh start-postgres.sh
-
-# a replica, on another host, with WRITER pointing at the writer's name
-sudo env SLOT=2 POOL=db WRITER=db-1.proj.internal \
-  PASSWORD_FILE=/tmp/pw CA_FILE=/path/ca.pem \
-  SERVER_CERT_FILE=/path/server.crt SERVER_KEY_FILE=/path/server.key \
-  CLIENT_CERT_FILE=/path/client.crt CLIENT_KEY_FILE=/path/client.key \
-  sh start-postgres.sh
+sudo env SLOT=1 POOL=db PASSWORD_FILE=/root/pg.password sh start-postgres.sh
 ```
 
-Connect as the application role with `psql "host=db.proj.internal user=app dbname=app
-sslmode=verify-full sslrootcert=/path/ca.pem"`.
+`<PARAM>_FILE` variables (`PASSWORD_FILE`, `CA_FILE`, `SERVER_CERT_FILE`,
+`SERVER_KEY_FILE`, `CLIENT_CERT_FILE`, `CLIENT_KEY_FILE`) are how file-backed parameters
+arrive; plain ones arrive upper-cased (`SLOT`, `POOL`, `WRITER`, `APP_USER`, `APP_DB`,
+`MAX_CONNECTIONS`).

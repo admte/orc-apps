@@ -2,10 +2,10 @@
 set -eu
 
 # Install phase: PostgreSQL 17 server and client from the PGDG apt repository, and
-# nothing else. No cluster is created here and no secret is written: a pool bake runs
-# install alone and snapshots the disk, so anything written here is shared by every
-# clone of that image. initdb, the application role, and a replica's seed are the
-# start phase's, which runs on the node that actually holds the slot.
+# nothing else. No cluster is created here and no secret is written, so the result is
+# identical on every node and safe to snapshot into a reusable machine image. initdb,
+# the application role, and a replica's seed all belong to the start phase, which runs
+# on the node that will actually hold the data.
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PG_PHASE=install
@@ -35,9 +35,11 @@ fi
 [ -n "$codename" ] || pg_fail "could not determine the release codename from /etc/os-release"
 arch=$(dpkg --print-architecture)
 
-pg_note "installing prerequisites (ca-certificates, curl, postgresql-common)"
+# openssl is used by the start phase to generate a server certificate when the
+# deployment supplies none.
+pg_note "installing prerequisites (ca-certificates, curl, openssl, postgresql-common)"
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl postgresql-common
+apt-get install -y -qq ca-certificates curl openssl postgresql-common
 
 # The distro's postgresql-common creates and enables a "main" cluster the moment the
 # server package lands. This app owns its clusters, so that is switched off before the
@@ -86,8 +88,9 @@ id "$PG_OS_USER" >/dev/null 2>&1 || pg_fail "the $PG_OS_USER account was not cre
 # The packaged umbrella unit must never start a cluster behind this app's back.
 systemctl disable --now postgresql >/dev/null 2>&1 || true
 
-# Directories the start phase fills. The persisted root is grafted by the platform
-# before install and is left alone here: what goes into it is slot 1's decision.
+# Directories the start phase fills. The durable root is left alone here: whether it
+# already holds a cluster is the writer's decision at start, and a deployment that
+# mounts storage there expects to find it untouched.
 mkdir -p "$APP_ROOT/replica" "$TLS_DIR"
 chown "$PG_OS_USER:$PG_OS_USER" "$APP_ROOT/replica" "$TLS_DIR"
 chmod 0700 "$APP_ROOT/replica" "$TLS_DIR"
