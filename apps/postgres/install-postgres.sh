@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
 
-# Install phase: PostgreSQL 17 server and client from the PGDG apt repository, and
+# Install phase: the PostgreSQL server and client packages for the selected major
+# version (APP_VERSION, default 17) from the PGDG apt repository, and
 # nothing else. No cluster is created here and no secret is written, so the result is
 # identical on every node and safe to snapshot into a reusable machine image. initdb,
 # the application role, and a replica's seed all belong to the start phase, which runs

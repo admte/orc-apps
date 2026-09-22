@@ -2,7 +2,7 @@ artifactType: application/vnd.orc8r.app.v1
 annotations:
   org.opencontainers.image.title: postgres
   # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
-  org.opencontainers.image.description: PostgreSQL 17 as a managed service; one writer, streaming replicas
+  org.opencontainers.image.description: PostgreSQL as a managed service; one writer, streaming replicas
 config:
   params:
     type: object
