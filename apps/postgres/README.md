@@ -1,6 +1,6 @@
 # postgres
 
-PostgreSQL 17 as a managed service. One node holds the data and takes writes; add more
+PostgreSQL as a managed service. One node holds the data and takes writes; add more
 nodes and each one streams from it as a hot standby.
 
 Nodes are told apart by a number: **node 1 is the writer**, and every other node is a
@@ -19,7 +19,7 @@ sudo orc install postgres --password=@/root/pg.password
 sudo orc start postgres
 ```
 
-That installs PostgreSQL 17, creates a cluster, creates the `app` role and the `app`
+That installs PostgreSQL, creates a cluster, creates the `app` role and the `app`
 database, generates a server certificate, and runs the server. Connections are encrypted
 from the first one: the listener is TLS-only and plain TCP is refused.
 
@@ -31,6 +31,21 @@ psql "host=<this-host> user=app dbname=app sslmode=require"
 sudo -u postgres psql                       # superuser, over the Unix socket
 psql -h /var/run/postgresql -U app -d app   # the application role
 ```
+
+## Which PostgreSQL version
+
+The package installs one PostgreSQL major version per node, chosen by the version the
+deployment selects. The runtime passes it to every phase as `APP_VERSION`, and the major
+is all that matters, so `17` and `17.6` mean the same thing. With no version named the
+package installs 17.
+
+The major decides the packages (`postgresql-<major>`) and the binary path, so changing it
+is a reinstall, not a restart. A node that already holds a cluster refuses to start
+against a different major rather than attempting an in-place upgrade, since `pg_upgrade`
+is a migration this package does not run for you.
+
+The recipe declares no version discovery, so the catalog offers only what is published.
+Add a `versions:` block to make a set of majors selectable.
 
 Sensitive parameters must be passed as a file (`--password=@<path>`) or a secret URI,
 never as a literal on the command line. `orc start` reuses the parameters given to
@@ -134,7 +149,7 @@ never keeps serving a certificate that is no longer supplied.
 | Certificates and keys | `/var/lib/orc-postgres/tls` |
 | Managed settings | `$PGDATA/conf.d/orc.conf`, `$PGDATA/pg_hba.conf`, `$PGDATA/pg_ident.conf` |
 | Socket | `/var/run/postgresql` |
-| Binaries | `/usr/lib/postgresql/17/bin` |
+| Binaries | `/usr/lib/postgresql/<major>/bin` |
 | Runs as | the `postgres` system account |
 
 The managed files are rewritten on every start; edits to them do not survive a restart.
@@ -146,7 +161,7 @@ and is thrown away and rebuilt on each start, so it is deliberately kept outside
 ## Lifecycle
 
 **install** adds the PGDG apt repository, turns off `postgresql-common`'s automatic
-`main` cluster, installs `postgresql-17` and `postgresql-client-17`, and disables the
+`main` cluster, installs `postgresql-<major>` and `postgresql-client-<major>`, and disables the
 packaged `postgresql` umbrella unit. It writes no data, no secret, and no node identity,
 so the result is identical on every node and safe to snapshot into a machine image.
 

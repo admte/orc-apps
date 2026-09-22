@@ -11,7 +11,19 @@
 #   /var/lib/orc-postgres/tls       the postgres account's copies of the certificates and
 #                                   keys the server uses, re-staged on every start.
 
-PG_MAJOR=${PG_MAJOR:-17}
+# Which PostgreSQL to run. APP_VERSION carries the version the deployment selected and
+# is set for every phase; the major alone decides the packages and the binary path, so
+# "17" and "17.6" mean the same thing here. Unset means the default below, which is what
+# a package installed without naming a version gets.
+PG_DEFAULT_MAJOR=17
+PG_MAJOR=${PG_MAJOR:-${APP_VERSION:-$PG_DEFAULT_MAJOR}}
+PG_MAJOR=${PG_MAJOR%%.*}
+case "$PG_MAJOR" in
+'' | *[!0-9]*)
+	echo "postgres: APP_VERSION must start with a major version number, got '${APP_VERSION:-}'" >&2
+	exit 1
+	;;
+esac
 PG_BIN=${PG_BIN:-/usr/lib/postgresql/$PG_MAJOR/bin}
 PG_PORT=5432
 PG_OS_USER=postgres
