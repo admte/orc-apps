@@ -148,6 +148,8 @@ fi
 (enable_agent) ||
 	note "could not enable the agent; starting anyway name=$agent_name"
 
+# The agent host needs no token once it is registered, and every job it runs
+# inherits its environment, so the path to the PAT stops here.
 note "starting the agent name=$agent_name dir=$work_dir"
 exec setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_USER" --init-groups \
-	env HOME="$work_dir" ./run.sh
+	env -u TOKEN_FILE -u TOKEN HOME="$work_dir" ./run.sh

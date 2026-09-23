@@ -89,6 +89,10 @@ try {
 	Write-Host "azure-pipelines-agent start: could not enable the agent; starting anyway name=$agentName error=$($_.Exception.Message)"
 }
 
+# The agent host needs no token once it is registered, and every job it runs
+# inherits its environment, so the path to the PAT stops here.
+Remove-Item Env:TOKEN_FILE, Env:TOKEN -ErrorAction SilentlyContinue
+
 # The agent runs as the account the runtime runs as; there is no unprivileged-user
 # rule to satisfy on Windows.
 Write-Host "azure-pipelines-agent start: starting the agent name=$agentName dir=$workDir"
