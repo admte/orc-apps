@@ -19,11 +19,9 @@ config:
         title: Personal access token
         description: PAT used to register, disable and remove this node's agent; needs the Agent Pools (read, manage) scope
         sensitive: true
-        # Declared rather than left to the default, which varies by type: a
-        # sensitive param with `startup` lifetime is withdrawn once the app has
-        # started, and this one is read after that — by stop, to disable the
-        # agent, and by stopped, to remove it once the agent host has exited.
-        lifetime: runtime
+        # No `lifetime`: a secret defaults to `startup`, which is enough. The agent
+        # host never reads the token once it runs, and the stop and stopped hooks
+        # are handed a freshly resolved copy whatever the lifetime.
       agent_pool:
         type: string
         title: Agent pool
