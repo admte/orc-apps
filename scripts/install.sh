@@ -3,7 +3,7 @@
 #
 # Usage:
 #   ./scripts/install.sh                    # latest stable release
-#   ORC_VERSION=v0.5.0 ./scripts/install.sh # specific tag
+#   ORC_VERSION=v0.5.2 ./scripts/install.sh # specific tag
 set -eu
 
 REPO="admte/orc"
