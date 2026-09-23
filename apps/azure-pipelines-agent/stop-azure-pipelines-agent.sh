@@ -75,7 +75,10 @@ if [ ! -x "$work_dir/config.sh" ]; then
 	note "no install found; nothing to quiesce dir=$work_dir"
 	exit 0
 fi
-work_dir=$(CDPATH= cd -- "$work_dir" && pwd)
+# The physical path: the worker's command line carries the one .NET resolved its
+# own binary to, so a work directory under a symlink would otherwise never match
+# and a running job would read as none — and be cut off by the stop signal.
+work_dir=$(CDPATH= cd -- "$work_dir" && pwd -P)
 
 agent_name=$(hostname)
 agent_pool=${AGENT_POOL:-${POOL:-}}
