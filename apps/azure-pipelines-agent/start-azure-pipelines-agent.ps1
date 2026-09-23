@@ -21,6 +21,30 @@ function Get-AuthHeader($token) {
 	return @{ Authorization = "Basic $([Convert]::ToBase64String($pair))" }
 }
 
+# The id of the Azure DevOps agent pool this node joins. Throws when the pool cannot
+# be read, including when no pool has that name.
+function Find-PoolId {
+	$poolQuery = [uri]::EscapeDataString($agentPool)
+	$pool = Invoke-RestMethod -Headers $headers `
+		-Uri "$org/_apis/distributedtask/pools?poolName=$poolQuery&api-version=$ApiVersion"
+	$poolId = @($pool.value)[0].id
+	if (-not $poolId) { throw "agent pool not found name=$agentPool" }
+	return $poolId
+}
+
+# The id of this node's agent in the pool, or $null when the pool holds no agent by
+# this name. Throws on anything that is not a collection — a sign-in page, an error
+# body — so an unreadable answer is never mistaken for a registration that is gone.
+function Find-AgentId($poolId) {
+	$agentQuery = [uri]::EscapeDataString($agentName)
+	$agents = Invoke-RestMethod -Headers $headers `
+		-Uri "$org/_apis/distributedtask/pools/$poolId/agents?agentName=$agentQuery&api-version=$ApiVersion"
+	if ($agents.PSObject.Properties.Name -notcontains 'value') {
+		throw "unexpected answer listing the agents of pool id=$poolId"
+	}
+	return @($agents.value)[0].id
+}
+
 $workDir = Join-Path (Get-Location) 'azure-pipelines-agent'
 if (-not (Test-Path -LiteralPath (Join-Path $workDir 'config.cmd') -PathType Leaf)) {
 	throw "azure-pipelines-agent start: no agent install found; install must run first dir=$workDir"
@@ -47,6 +71,25 @@ if (-not $agentPool) {
 # and the `.credentials` beside it are this node's identity. Absent means the node
 # has none yet, so register; present means an ordinary service restart, so the
 # same identity is reused. The stopped hook's `config.cmd remove` deletes it.
+#
+# An identity is only as good as the registration behind it. When Azure DevOps
+# answers that the pool holds no agent by this name — an admin deleted it — the
+# local files name an agent that no longer exists, and the agent host would fail
+# its authentication on every restart. Drop them and register afresh. Only a
+# definite "no such agent" does this; a lookup that fails keeps the identity.
+if (Test-Path -LiteralPath (Join-Path $workDir '.agent')) {
+	try {
+		if (-not (Find-AgentId (Find-PoolId))) {
+			Write-Host "azure-pipelines-agent start: the registration is gone from Azure DevOps; registering again name=$agentName pool=$agentPool"
+			foreach ($file in '.agent', '.credentials', '.credentials_rsaparams') {
+				Remove-Item -LiteralPath (Join-Path $workDir $file) -Force -ErrorAction SilentlyContinue
+			}
+		}
+	} catch {
+		Write-Host "azure-pipelines-agent start: could not check the registration; keeping it name=$agentName error=$($_.Exception.Message)"
+	}
+}
+
 if (Test-Path -LiteralPath (Join-Path $workDir '.agent')) {
 	Write-Host "azure-pipelines-agent start: already registered; reusing this node's identity name=$agentName"
 } else {
@@ -71,15 +114,8 @@ if (Test-Path -LiteralPath (Join-Path $workDir '.agent')) {
 # otherwise come back online disabled — healthy-looking and never given a job.
 # Never fatal: an agent to enable by hand beats a node that will not start.
 try {
-	$poolQuery = [uri]::EscapeDataString($agentPool)
-	$pool = Invoke-RestMethod -Headers $headers `
-		-Uri "$org/_apis/distributedtask/pools?poolName=$poolQuery&api-version=$ApiVersion"
-	$poolId = @($pool.value)[0].id
-	if (-not $poolId) { throw "agent pool not found name=$agentPool" }
-	$agentQuery = [uri]::EscapeDataString($agentName)
-	$agents = Invoke-RestMethod -Headers $headers `
-		-Uri "$org/_apis/distributedtask/pools/$poolId/agents?agentName=$agentQuery&api-version=$ApiVersion"
-	$agentId = @($agents.value)[0].id
+	$poolId = Find-PoolId
+	$agentId = Find-AgentId $poolId
 	if (-not $agentId) { throw "agent is not registered name=$agentName" }
 	Invoke-RestMethod -Method Patch -Headers $headers -ContentType 'application/json' `
 		-Body (@{ id = $agentId; enabled = $true } | ConvertTo-Json -Compress) `

@@ -39,11 +39,16 @@ json_field() {
 	python3 -c 'import json,sys; print(json.load(sys.stdin).get(sys.argv[1]) or "")' "$1"
 }
 
-# The id of the first entry of an Azure DevOps collection response, or nothing.
+# The id of the first entry of an Azure DevOps collection response, or nothing for
+# an empty one. Anything that is not a collection — a sign-in page, an error body,
+# no body at all — fails, so an empty answer always means the list was empty.
 first_id() {
 	python3 -c '
 import json, sys
-value = json.load(sys.stdin).get("value") or []
+try:
+    value = json.load(sys.stdin)["value"]
+except (ValueError, KeyError, TypeError):
+    sys.exit(1)
 print(value[0].get("id", "") if value else "")
 '
 }
@@ -63,6 +68,23 @@ api_call() {
 		curl -fsSL -K - -X "$method" "$@" "$org/_apis/$path"
 }
 
+# The id of the Azure DevOps agent pool this node joins. Fails when the pool cannot
+# be read, including when no pool has that name.
+find_pool() {
+	found=$(api_call GET "distributedtask/pools?poolName=$(url_encode "$agent_pool")&api-version=$API_VERSION" |
+		first_id) || return 1
+	[ -n "$found" ] || return 1
+	printf '%s\n' "$found"
+}
+
+# The id of this node's agent in pool $1, or nothing when the pool holds no agent by
+# this name. Fails when the pool cannot be read, so an unreachable API or a rejected
+# token is never mistaken for a registration that is gone.
+find_agent() {
+	api_call GET "distributedtask/pools/$1/agents?agentName=$(url_encode "$agent_name")&api-version=$API_VERSION" |
+		first_id
+}
+
 # Puts the agent back into rotation. stop-azure-pipelines-agent disables it
 # through the API so the pool stops routing work here during a drain, and the
 # registration itself outlives every stop reason but `terminate` — so a drained
@@ -70,11 +92,8 @@ api_call() {
 # never given another job. Never fatal: an agent that has to be enabled by hand
 # still beats a node that will not start.
 enable_agent() {
-	pool_id=$(api_call GET "distributedtask/pools?poolName=$(url_encode "$agent_pool")&api-version=$API_VERSION" |
-		first_id)
-	[ -n "$pool_id" ] || fail "agent pool not found name=$agent_pool"
-	agent_id=$(api_call GET "distributedtask/pools/$pool_id/agents?agentName=$(url_encode "$agent_name")&api-version=$API_VERSION" |
-		first_id)
+	pool_id=$(find_pool) || fail "agent pool not found name=$agent_pool"
+	agent_id=$(find_agent "$pool_id") || fail "could not read the agent pool name=$agent_pool"
 	[ -n "$agent_id" ] || fail "agent is not registered name=$agent_name"
 	api_call PATCH "distributedtask/pools/$pool_id/agents/$agent_id?api-version=$API_VERSION" \
 		-o /dev/null -H 'Content-Type: application/json' \
@@ -124,6 +143,18 @@ agent_pool=${AGENT_POOL:-${POOL:-}}
 # means an ordinary service restart, so the same identity is reused. The stopped
 # hook's `config.sh remove` deletes `.agent`, which is what makes a
 # terminated-then-restarted install register again rather than start unconfigured.
+#
+# An identity is only as good as the registration behind it. When Azure DevOps
+# answers that the pool holds no agent by this name — an admin deleted it — the
+# local files name an agent that no longer exists, and the agent host would fail
+# its authentication on every restart. Drop them and register afresh. Only a
+# definite "no such agent" does this; a lookup that fails keeps the identity.
+if [ -f .agent ] && pool_id=$(find_pool) && agent_id=$(find_agent "$pool_id") &&
+	[ -z "$agent_id" ]; then
+	note "the registration is gone from Azure DevOps; registering again name=$agent_name pool=$agent_pool"
+	rm -f .agent .credentials .credentials_rsaparams
+fi
+
 if [ -f .agent ]; then
 	note "already registered; reusing this node's identity name=$agent_name dir=$work_dir"
 else
