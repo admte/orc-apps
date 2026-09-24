@@ -1,0 +1,86 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: gitlab-runner
+  org.opencontainers.image.description: GitLab Runner executing CI/CD jobs for a GitLab project or group
+  org.opencontainers.image.source: https://gitlab.com/gitlab-org/gitlab-runner
+config:
+  versions:
+    source: gitlab_releases
+    url: https://gitlab.com/gitlab-org/gitlab-runner
+    filter:
+      pattern: '^v?(?P<version>\d+\.\d+\.\d+)$'
+      latest_per: minor
+      limit: 30
+  params:
+    type: object
+    required: [url, token]
+    x-ui-order: [url, token, executor]
+    properties:
+      url:
+        type: string
+        title: Project or group URL
+        description: GitLab project or group the runner is created in; the instance URL alone creates an instance runner
+        placeholder: https://gitlab.com/group/project
+      token:
+        type: string
+        title: GitLab access token
+        description: Access token used to create, pause and delete this node's runner; needs the create_runner and manage_runner scopes
+        sensitive: true
+      executor:
+        type: string
+        title: Executor
+        description: How jobs are executed. The docker executor needs the docker app on the same node.
+        enum: [shell, docker]
+      pool:
+        type: string
+        title: Runner tag
+        description: Tag applied to the runner, so `tags:` in .gitlab-ci.yml routes to this pool; sourced from the pool name.
+        x-source:
+          kind: pool.name
+  # Downloads and verifies the binary and nothing else. Creating the runner is the
+  # start phase's, because a pool bake runs install alone and snapshots the disk:
+  # a runner created here would be baked into a shared image along with the
+  # authentication token config.toml holds.
+  install: {}
+  # Runtime-managed service: the node writes the service definition from this
+  # block, so the package never calls `gitlab-runner install`, which would register
+  # a second service competing with the platform's own service manager. No
+  # `command` here — the packaged start-gitlab-runner.{sh,ps1} resolves per
+  # platform, and a start command that resolves plus a `service` name is what
+  # selects runtime-managed service mode.
+  start:
+    service: gitlab-runner
+  # stop-gitlab-runner pauses the runner through the API and waits for the job in
+  # flight, so the hour is the cap on that wait — `grace` would be, otherwise, and
+  # thirty seconds is not a build. SIGQUIT is gitlab-runner's own graceful
+  # shutdown, so by the time it is sent there is nothing left to drain; SIGTERM
+  # and SIGINT would abort the build instead, which is why the signal is declared.
+  stop:
+    signal: SIGQUIT
+    timeout: 1h
+    grace: 30s
+  # Deletes the runner in GitLab, and only when the node is ending for good.
+  stopped:
+    timeout: 120s
+  uninstall:
+    timeout: 300s
+files:
+  - install-gitlab-runner.sh
+  - start-gitlab-runner.sh
+  - stop-gitlab-runner.sh
+  - stopped-gitlab-runner.sh
+  - uninstall-gitlab-runner.sh
+  - install-gitlab-runner.ps1
+  - start-gitlab-runner.ps1
+  - stop-gitlab-runner.ps1
+  - stopped-gitlab-runner.ps1
+  - uninstall-gitlab-runner.ps1
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
+  - os: windows
+    arch: amd64
+  - os: windows
+    arch: arm64
