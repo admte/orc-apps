@@ -75,6 +75,23 @@ api_call() {
 		curl -fsSL -K - -X "$method" "$@" "$api/$path"
 }
 
+# The HTTP status of a GET, so a definite "no such runner" can be told apart from
+# a lookup that merely failed.
+api_status() {
+	printf 'header = "PRIVATE-TOKEN: %s"\n' "$gitlab_token" |
+		curl -sS -K - -o /dev/null -w '%{http_code}' "$api/$1" 2>/dev/null
+}
+
+# An administrator can delete the runner in GitLab while config.toml still names
+# it. The runner would then fail authentication on every restart and never take a
+# job, so the local state is dropped and a new runner created. Only a definite 404
+# does this: a lookup that fails, or a token without the scope to look, keeps the
+# runner this node already has.
+runner_gone() {
+	[ -s "$id_file" ] || return 1
+	[ "$(api_status "runners/$(cat "$id_file")")" = 404 ]
+}
+
 # A project path is a single path-encoded segment for the API, so every slash in
 # it has to be escaped: group/subgroup/project -> group%2Fsubgroup%2Fproject.
 url_encode() {
@@ -175,6 +192,11 @@ executor=${EXECUTOR:-shell}
 # whose baked image deliberately carries none. The stopped hook deletes the runner
 # and removes config.toml, which is what makes a terminated-then-restarted node
 # create a new one rather than start against a runner GitLab no longer has.
+if grep -q '^\[\[runners\]\]' "$config" 2>/dev/null && runner_gone; then
+	note "the runner is gone from GitLab; creating a new one name=$runner_name"
+	rm -f "$config" "$id_file"
+fi
+
 if grep -q '^\[\[runners\]\]' "$config" 2>/dev/null; then
 	note "already registered; reusing this node's runner name=$runner_name"
 	(resume_runner) || note "could not resume the runner; starting anyway name=$runner_name"
@@ -226,8 +248,10 @@ else
 	note "runner created and registered name=$runner_name id=$runner_id"
 fi
 
+# The runner authenticates with the token config.toml holds, not with this one,
+# and every job it runs inherits its environment — so the access token stops here.
 note "starting the runner name=$runner_name config=$config"
-exec "$runner" run \
+exec env -u TOKEN_FILE -u TOKEN "$runner" run \
 	--config "$config" \
 	--working-directory "$builds" \
 	--user "$SERVICE_USER"

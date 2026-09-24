@@ -50,6 +50,23 @@ function Resolve-Target($api, $headers, $uri) {
 	throw "gitlab-runner start: no project or group at $namespace, or the token cannot see it"
 }
 
+# An administrator can delete the runner in GitLab while config.toml still names
+# it. The runner would then fail authentication on every restart and never take a
+# job. Only a definite 404 counts: a lookup that fails, or a token without the
+# scope to look, keeps the runner this node already has.
+function Test-RunnerGone($api, $headers, $idFile) {
+	if (-not (Test-Path -LiteralPath $idFile)) { return $false }
+	$id = (Get-Content -Raw -LiteralPath $idFile).Trim()
+	if (-not $id) { return $false }
+	try {
+		Invoke-RestMethod -Headers $headers -Uri "$api/runners/$id" | Out-Null
+		return $false
+	} catch {
+		$status = $_.Exception.Response.StatusCode
+		return ($null -ne $status -and [int]$status -eq 404)
+	}
+}
+
 # By path, not through PATH, and by the version this app instance was installed
 # as: `current` belongs to whichever version was installed last, which on a node
 # carrying two of them is somebody else's.
@@ -82,6 +99,12 @@ $executor = if ($env:EXECUTOR) { $env:EXECUTOR } else { 'shell' }
 
 $registered = (Test-Path -LiteralPath $config) -and
 	(Select-String -LiteralPath $config -Pattern '^\[\[runners\]\]' -Quiet)
+if ($registered -and (Test-RunnerGone $api $headers $idFile)) {
+	Write-Host "gitlab-runner start: the runner is gone from GitLab; creating a new one name=$runnerName"
+	Remove-Item -LiteralPath $config -Force -ErrorAction SilentlyContinue
+	Remove-Item -LiteralPath $idFile -Force -ErrorAction SilentlyContinue
+	$registered = $false
+}
 if ($registered) {
 	Write-Host "gitlab-runner start: already registered; reusing this node's runner name=$runnerName"
 	# Puts the runner back into rotation: stop pauses it through the API, and the
@@ -149,6 +172,11 @@ if ($registered) {
 	}
 	Write-Host "gitlab-runner start: runner created and registered name=$runnerName id=$($created.id)"
 }
+
+# The runner authenticates with the token config.toml holds, not with this one,
+# and every job it runs inherits its environment — so the access token stops here.
+Remove-Item Env:TOKEN -ErrorAction SilentlyContinue
+Remove-Item Env:TOKEN_FILE -ErrorAction SilentlyContinue
 
 Write-Host "gitlab-runner start: starting the runner name=$runnerName config=$config"
 & $runner run --config $config --working-directory $builds

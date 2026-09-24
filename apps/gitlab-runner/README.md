@@ -44,9 +44,17 @@ publishes for that exact file. A mismatch fails the install.
   be baked into an image every clone shares, along with its authentication token.
 - **start** creates this node's runner through `POST /user/runners` when there is
   none, records its id, and registers it locally; on an ordinary restart it
-  reuses the existing one and resumes it, because `stop` left it paused. The
-  runner token is passed through the environment, never as a flag, so it does not
-  show up in the process list of the jobs the runner later spawns.
+  reuses the existing one and resumes it, because `stop` left it paused. If GitLab
+  answers that the recorded runner no longer exists — an administrator deleted it
+  — the local state is dropped and a new runner created, because the old one could
+  never authenticate again. Only a definite 404 does that; a lookup that merely
+  fails keeps the runner the node already has.
+
+  The runner token is passed through the environment, never as a flag, so it does
+  not show up in the process list of the jobs the runner later spawns. The access
+  token is removed from the environment altogether before the runner starts: the
+  runner authenticates with what `config.toml` holds, and every job it spawns
+  inherits its environment.
 - **stop** pauses the runner through the API so the queue stops routing work
   here, then waits for the job already running. The wait belongs to the stop
   command on both platforms: only it gets the full `stop.timeout`, while the
