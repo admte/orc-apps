@@ -1,0 +1,30 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: playwright
+  org.opencontainers.image.description: Prepare a node to run Playwright tests - system dependencies and a shared browser cache
+  org.opencontainers.image.source: https://github.com/microsoft/playwright
+config:
+  # No `versions`: the system libraries the browsers link against do not vary by
+  # Playwright release, and the release that matters is the one pinned in the
+  # repository under test, which is not known when a node is requested. The job
+  # brings its own Playwright and its own browsers; what it cannot bring is
+  # root, which is what these packages need.
+  #
+  # No `params`: there is nothing to configure.
+  #
+  # Installing several dozen Debian packages can be tight for the 600s default
+  # on a slow mirror. Windows installs only the Media Feature Pack and is quick.
+  install:
+    timeout: 1800s
+files:
+  - install-playwright.sh
+  - install-playwright.ps1
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
+  # x64 only: Playwright refuses to install Windows dependencies on any other
+  # architecture.
+  - os: windows
+    arch: amd64

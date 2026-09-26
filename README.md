@@ -138,6 +138,7 @@ low-level, one-platform extract.
 | github-runner | draft | GitHub Actions self-hosted runner as a managed service; drains the in-flight job on stop; linux + windows |
 | jenkins-agent | draft | Jenkins Swarm agent as a managed service; drains the in-flight build on stop; linux + windows |
 | terraform | draft | Terraform CLI from HashiCorp Releases; version-scoped install; linux only |
+| playwright | draft | Playwright system dependencies plus a shared browser cache; no settings; self-contained; linux + windows |
 
 ## Related repos
 
