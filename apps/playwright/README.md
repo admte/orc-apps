@@ -118,9 +118,15 @@ on the order two apps happen to install in.
   is a no-op, so is the Media Feature Pack installer, and the cache directory is
   only created if missing.
 
-There is no `uninstall`. These are shared system libraries, and several of them
-were probably on the node before this app arrived; removing them would break
-whatever else links against them.
+- **uninstall** removes the shared browser cache — the directory this app
+  created, and the gigabytes of browsers that ended up in it because of this
+  app.
+
+  The system libraries stay. They are not this app's to remove: several were on
+  the node before it arrived, other software links against them, and `apt-get
+  remove` on eighty packages is a good way to break a machine. The catalog draws
+  the same line — `go`, `node` and `java` remove their own trees, `docker` and
+  `cpp-dev-tools` leave system packages alone.
 
 ## Limitations
 

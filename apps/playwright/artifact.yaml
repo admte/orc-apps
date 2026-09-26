@@ -16,9 +16,15 @@ config:
   # on a slow mirror. Windows installs only the Media Feature Pack and is quick.
   install:
     timeout: 1800s
+  # Removes the browser cache this app created, and nothing else: the system
+  # libraries are shared with the rest of the node, which is why `docker` and
+  # `cpp-dev-tools` leave theirs alone too.
+  uninstall: {}
 files:
   - install-playwright.sh
+  - uninstall-playwright.sh
   - install-playwright.ps1
+  - uninstall-playwright.ps1
 platforms:
   - os: linux
     arch: amd64
