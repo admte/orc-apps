@@ -138,6 +138,8 @@ low-level, one-platform extract.
 | github-runner | draft | GitHub Actions self-hosted runner as a managed service; drains the in-flight job on stop; linux + windows |
 | jenkins-agent | draft | Jenkins Swarm agent as a managed service; drains the in-flight build on stop; linux + windows |
 | terraform | draft | Terraform CLI from HashiCorp Releases; version-scoped install; linux only |
+| vllm | draft | vLLM inference server as a managed service; one model over an OpenAI-compatible endpoint; linux + NVIDIA GPU |
+| sglang | draft | SGLang inference server as a managed service; one model over an OpenAI-compatible endpoint; linux + NVIDIA GPU |
 
 ## Related repos
 
