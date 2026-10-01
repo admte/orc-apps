@@ -1,4 +1,41 @@
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+
+# Windows 10 1809 and Server 2019 share build 17763, Claude Code's minimum.
+$os = Get-CimInstance -ClassName Win32_OperatingSystem
+if ([version]$os.Version -lt [version]'10.0.17763') {
+	throw "claude install: $($os.Caption) ($($os.Version)) is unsupported. Claude Code requires Windows Server 2019 or newer, or Windows 10 1809 or newer. Upgrade the pool's OS before retrying. See https://code.claude.com/docs/en/setup"
+}
+
+function Save-ClaudeDownload {
+	param([string]$Url, [string]$Path)
+
+	# Native curl avoids Windows PowerShell 5.1's legacy .NET TLS defaults.
+	# Skip revocation fetches that can fail on a fresh guest; certificate trust
+	# and hostname validation remain enabled, and the archive is checked below.
+	$curl = Join-Path $env:SystemRoot 'System32\curl.exe'
+	if (Test-Path -LiteralPath $curl -PathType Leaf) {
+		& $curl --fail --location --silent --show-error --ssl-no-revoke `
+			--retry 3 --retry-delay 3 --connect-timeout 30 --max-time 300 `
+			--output $Path $Url
+		if ($LASTEXITCODE -eq 0) { return }
+		Write-Warning "claude install: curl.exe download failed (exit $LASTEXITCODE); retrying with PowerShell"
+	}
+
+	[Net.ServicePointManager]::SecurityProtocol = `
+		[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+	for ($attempt = 1; $attempt -le 3; $attempt++) {
+		try {
+			Invoke-WebRequest -UseBasicParsing -TimeoutSec 300 -Uri $Url -OutFile $Path
+			return
+		} catch {
+			if ($attempt -eq 3) {
+				throw "claude install: failed to download ${Url}: $($_.Exception.Message)"
+			}
+			Start-Sleep -Seconds 3
+		}
+	}
+}
 
 $existing = Get-Command claude -ErrorAction SilentlyContinue
 if ($existing -and -not $env:APP_VERSION -and -not $env:CLAUDE_CODE_FORCE_INSTALL) {
@@ -33,8 +70,8 @@ try {
 	$archivePath = Join-Path $tmp $archive
 	$checksumsPath = Join-Path $tmp 'SHASUMS256.txt'
 	Write-Host "Downloading Claude Code for windows/$architecture"
-	Invoke-WebRequest -UseBasicParsing -Uri "$baseUrl/$archive" -OutFile $archivePath
-	Invoke-WebRequest -UseBasicParsing -Uri "$baseUrl/SHASUMS256.txt" -OutFile $checksumsPath
+	Save-ClaudeDownload -Url "$baseUrl/$archive" -Path $archivePath
+	Save-ClaudeDownload -Url "$baseUrl/SHASUMS256.txt" -Path $checksumsPath
 
 	$checksumLine = Get-Content $checksumsPath |
 		Where-Object { $_ -match "^[0-9a-fA-F]{64}\s+\*?$([regex]::Escape($archive))$" } |
