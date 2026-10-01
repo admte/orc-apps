@@ -29,7 +29,16 @@ commit the settings file or API key.
 
 - Linux amd64 and arm64.
 - macOS amd64 and arm64.
-- Windows amd64 and arm64.
+- Windows amd64 and arm64, Windows 10 1809+ or Windows Server 2019+.
+
+The Windows installer checks the OS before reusing or downloading Claude Code. Windows
+Server 2016 fails with an explicit upgrade message rather than a misleading download error.
+See [Claude Code's system requirements](https://code.claude.com/docs/en/setup).
+
+Windows downloads use native `curl.exe` with retries. Certificate trust and hostname
+validation remain enabled; revocation fetches are skipped to tolerate fresh guests whose
+network is still settling. If curl is unavailable or fails, PowerShell retries with TLS 1.2
+enabled. Both paths retain the published archive's SHA-256 checksum verification.
 
 ## Build
 
