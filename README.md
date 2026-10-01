@@ -137,6 +137,7 @@ low-level, one-platform extract.
 | cursor | draft | Cursor CLI with optional startup API key |
 | github-runner | draft | GitHub Actions self-hosted runner as a managed service; drains the in-flight job on stop; linux + windows |
 | jenkins-agent | draft | Jenkins Swarm agent as a managed service; drains the in-flight build on stop; linux + windows |
+| gitlab-runner | draft | GitLab Runner as a managed service; version-scoped install; drains the in-flight job on stop; linux + windows |
 | terraform | draft | Terraform CLI from HashiCorp Releases; version-scoped install; linux only |
 
 ## Related repos
