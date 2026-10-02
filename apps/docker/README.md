@@ -1,6 +1,6 @@
 # docker
 
-Installs the Docker engine from Docker's official apt repository.
+Installs the Docker engine from Docker's official apt or RPM repository.
 
 ```text
 docker/
@@ -8,8 +8,8 @@ docker/
   install-docker.sh
 ```
 
-Install-only: there is no start phase. Installation runs as root, sets up Docker's apt repo
-(`docker-ce`, `docker-ce-cli`,
+Install-only: there is no start phase. Installation runs as root and sets up Docker's
+repo (`docker-ce`, `docker-ce-cli`,
 `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin`), and enables
 the `docker` systemd service so the daemon starts at boot.
 
@@ -20,9 +20,11 @@ None. This app takes no configuration.
 ## Platforms
 
 - Linux amd64 and arm64 (Ubuntu/Debian via `apt-get`).
+- AlmaLinux 9/10 and RHEL-compatible systems via `dnf` and Docker's RHEL repository.
 
 Ubuntu 26.04's codename may not yet exist in Docker's apt repo; the installer
-falls back to the previous Ubuntu LTS codename (`noble`) and retries.
+falls back to the previous Ubuntu LTS codename (`noble`) and retries. Debian never
+falls back to an Ubuntu repository.
 
 ## Used by other apps
 
