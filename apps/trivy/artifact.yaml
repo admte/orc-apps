@@ -1,0 +1,32 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: trivy
+  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  org.opencontainers.image.description: Trivy security scanner for containers, filesystems and repositories
+  org.opencontainers.image.source: https://trivy.dev
+config:
+  versions:
+    source: github_releases
+    url: https://github.com/aquasecurity/trivy
+    filter:
+      # No pattern, the way terraform does it: that project also tags with a leading "v"
+      # and its list works without one. The scripts strip a leading "v" if it reaches
+      # them, so either spelling installs correctly.
+      prerelease: false
+      latest_per: minor
+      limit: 30
+  install: {}
+  uninstall: {}
+files:
+  - install-trivy.sh
+  - uninstall-trivy.sh
+  - install-trivy.ps1
+  - uninstall-trivy.ps1
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
+  # The project publishes a single Windows archive, 64-bit only; there is no arm64 one.
+  - os: windows
+    arch: amd64
