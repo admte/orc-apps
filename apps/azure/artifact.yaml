@@ -1,0 +1,69 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: azure
+  org.opencontainers.image.description: Install and configure Azure CLI
+  org.opencontainers.image.source: https://github.com/Azure/azure-cli
+config:
+  params:
+    type: object
+    required: []
+    # The order az itself names them in: --username, --password, --tenant.
+    x-ui-order: [azure_client_id, azure_client_secret, azure_tenant_id]
+    # Three fields, all optional and all needed together: this is what a service
+    # principal is, and none of the three can be derived from the others.
+    # Without them the CLI is installed and left unauthenticated, the same way
+    # aws and gcloud behave when their credentials are omitted.
+    properties:
+      azure_client_id:
+        type: string
+        title: Client ID
+        description: Optional service principal application (client) ID
+        placeholder: 00000000-0000-0000-0000-000000000000
+      azure_client_secret:
+        type: string
+        title: Client secret
+        description: Optional service principal client secret
+        sensitive: true
+        # Withdrawn once start has run: nothing needs it afterwards, and it has
+        # no business staying in the environment of the node's own jobs.
+        lifetime: startup
+      azure_tenant_id:
+        type: string
+        title: Tenant ID
+        description: Optional directory (tenant) ID, as a GUID or a domain name
+        placeholder: 00000000-0000-0000-0000-000000000000
+  versions:
+    # Azure/azure-cli tags every release but publishes no GitHub releases, so
+    # tags are the only enumerable source — the same reason aws reads tags. The
+    # tags carry a prefix, which the pattern strips: azure-cli-2.90.0 is offered
+    # as 2.90.0, and that is what pip takes.
+    source: github_tags
+    url: https://github.com/Azure/azure-cli
+    filter:
+      pattern: '^azure-cli-(?P<version>\d+\.\d+\.\d+)$'
+      limit: 30
+  # The CLI and its dependency tree are a few hundred megabytes from PyPI.
+  install:
+    timeout: 1200s
+  start: {}
+  uninstall: {}
+files:
+  - install-azure.sh
+  - start-azure.sh
+  - uninstall-azure.sh
+  - install-azure.ps1
+  - start-azure.ps1
+  - uninstall-azure.ps1
+  # Dot-sourced by the three Windows phases so they cannot disagree about where
+  # the CLI is or what counts as this app's to remove. Not a phase itself: the
+  # name matches none, so discovery never runs it.
+  - azure-common.ps1
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
+  # Windows amd64 only: Microsoft builds the installer for x86 and x64, and no
+  # arm64 MSI is published. aws declares the same single Windows platform.
+  - os: windows
+    arch: amd64
