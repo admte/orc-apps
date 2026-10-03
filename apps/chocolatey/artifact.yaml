@@ -1,0 +1,43 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: chocolatey
+  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  org.opencontainers.image.description: Chocolatey package manager for Windows, and the packages it installs
+  org.opencontainers.image.source: https://chocolatey.org
+config:
+  params:
+    type: object
+    required: []
+    properties:
+      packages:
+        type: string
+        title: Packages
+        description: Space-separated package names; empty installs the manager only
+        placeholder: git 7zip curl
+      chocolatey_source:
+        type: string
+        title: Package feed
+        description: Optional feed URL; empty uses the Chocolatey Community Repository
+        placeholder: https://artifactory.example.com/artifactory/api/nuget/chocolatey
+  versions:
+    source: github_releases
+    url: https://github.com/chocolatey/choco
+    filter:
+      prerelease: false
+      # The project tags bare version numbers. The pattern keeps anything else out.
+      pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'
+      latest_per: minor
+      limit: 30
+  install:
+    # The package itself installs in well under a minute; the allowance is for a slow
+    # registry and for a cold image.
+    timeout: 600s
+  start: {}
+files:
+  - install-chocolatey.ps1
+  - start-chocolatey.ps1
+platforms:
+  # Chocolatey is built for x64 Windows; there is no arm64 build of it, and `aws`
+  # declares the same single Windows platform.
+  - os: windows
+    arch: amd64
