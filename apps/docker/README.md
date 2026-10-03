@@ -22,6 +22,10 @@ None. This app takes no configuration.
 - Linux amd64 and arm64 (Ubuntu/Debian via `apt-get`).
 - AlmaLinux 9/10 and RHEL-compatible systems via `dnf` and Docker's RHEL repository.
 
+On EL10 cloud images, installation adds `kernel-modules-extra` for the running
+kernel when its iptables `addrtype` extension is missing. RPM installation
+skips weak dependencies to avoid pulling an unrelated debug kernel.
+
 Ubuntu 26.04's codename may not yet exist in Docker's apt repo; the installer
 falls back to the previous Ubuntu LTS codename (`noble`) and retries. Debian never
 falls back to an Ubuntu repository.

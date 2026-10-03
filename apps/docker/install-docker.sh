@@ -30,7 +30,17 @@ almalinux | rhel | rocky | centos)
 	echo "Configuring Docker's RHEL repository for $distro" >&2
 	dnf -y install dnf-plugins-core ca-certificates
 	dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
-	dnf -y install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+	# EL10 moved iptables extensions out of the minimal cloud kernel package.
+	# Match the running kernel so Docker can start before any reboot.
+	case "${VERSION_ID:-}" in
+	10 | 10.*)
+		if ! modprobe xt_addrtype 2>/dev/null; then
+			dnf -y --setopt=install_weak_deps=False install "kernel-modules-extra-$(uname -r)"
+			modprobe xt_addrtype
+		fi
+		;;
+	esac
+	dnf -y --setopt=install_weak_deps=False install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 	;;
 ubuntu | debian)
 	command -v apt-get >/dev/null 2>&1 || fail "apt-get is required on $distro"
@@ -73,7 +83,10 @@ ubuntu | debian)
 esac
 
 echo "Enabling and starting the docker service" >&2
-systemctl enable --now docker
+if ! systemctl enable --now docker; then
+	journalctl -u docker.service -b -n 50 --no-pager >&2 || true
+	fail "docker service failed to start"
+fi
 
 # The daemon can take a moment to accept connections after start.
 i=0
