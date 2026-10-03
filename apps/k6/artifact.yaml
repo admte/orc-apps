@@ -1,0 +1,31 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: k6
+  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  org.opencontainers.image.description: Grafana k6 load testing tool
+  org.opencontainers.image.source: https://k6.io
+config:
+  versions:
+    # Shaped after `uv` and `terraform`, whose version lists work in this orchestrator.
+    # The pattern allows the leading "v" the project tags with; the scripts strip it.
+    source: github_releases
+    url: https://github.com/grafana/k6
+    filter:
+      prerelease: false
+      pattern: "^v?[0-9]+\\.[0-9]+\\.[0-9]+$"
+      limit: 30
+  install: {}
+  uninstall: {}
+files:
+  - install-k6.sh
+  - uninstall-k6.sh
+  - install-k6.ps1
+  - uninstall-k6.ps1
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
+  # The project publishes no Windows arm64 build.
+  - os: windows
+    arch: amd64
