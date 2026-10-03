@@ -11,7 +11,8 @@ docker/
 Install-only: there is no start phase. Installation runs as root and sets up Docker's
 repo (`docker-ce`, `docker-ce-cli`,
 `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin`), and enables
-the `docker` systemd service so the daemon starts at boot.
+the Docker systemd service and socket. A generalized EL10 clone can apply vendor
+presets at first boot and start the daemon through `docker.socket` when first used.
 
 ## Parameters
 
