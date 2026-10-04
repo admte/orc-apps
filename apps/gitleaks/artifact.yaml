@@ -1,0 +1,32 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: gitleaks
+  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  org.opencontainers.image.description: Gitleaks secret scanner for git repositories and files
+  org.opencontainers.image.source: https://gitleaks.io
+config:
+  versions:
+    # Shaped after `uv` and `terraform`, whose version lists work in this orchestrator.
+    # The pattern allows the leading "v" the project tags with; the scripts strip it.
+    source: github_releases
+    url: https://github.com/gitleaks/gitleaks
+    filter:
+      prerelease: false
+      pattern: "^v?[0-9]+\\.[0-9]+\\.[0-9]+$"
+      limit: 30
+  install: {}
+  uninstall: {}
+files:
+  - install-gitleaks.sh
+  - uninstall-gitleaks.sh
+  - install-gitleaks.ps1
+  - uninstall-gitleaks.ps1
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
+  - os: windows
+    arch: amd64
+  - os: windows
+    arch: arm64
