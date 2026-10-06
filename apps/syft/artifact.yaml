@@ -1,0 +1,32 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: syft
+  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  org.opencontainers.image.description: Syft SBOM generator for container images and filesystems
+  org.opencontainers.image.source: https://github.com/anchore/syft
+config:
+  versions:
+    # Shaped after `uv` and `terraform`, whose version lists work in this orchestrator.
+    # The pattern allows the leading "v" the project tags with; the scripts strip it.
+    source: github_releases
+    url: https://github.com/anchore/syft
+    filter:
+      prerelease: false
+      pattern: "^v?[0-9]+\\.[0-9]+\\.[0-9]+$"
+      limit: 30
+  install: {}
+  uninstall: {}
+files:
+  - install-syft.sh
+  - uninstall-syft.sh
+  - install-syft.ps1
+  - uninstall-syft.ps1
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
+  - os: windows
+    arch: amd64
+  # TEMPORARY — diagnostic only. Windows arm64 removed to test whether a fourth platform
+  # is what keeps the version list empty. Put it back once the answer is known.
