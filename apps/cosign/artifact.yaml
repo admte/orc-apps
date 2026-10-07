@@ -1,0 +1,31 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: cosign
+  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  org.opencontainers.image.description: Sigstore cosign for signing and verifying artifacts
+  org.opencontainers.image.source: https://sigstore.dev
+config:
+  versions:
+    # Shaped after `terraform`, whose version list works in this orchestrator and which
+    # declares no pattern. sigstore maintains 2.x and 3.x in parallel, so its newest
+    # releases interleave the two lines; no other package here does that.
+    source: github_releases
+    url: https://github.com/sigstore/cosign
+    filter:
+      prerelease: false
+      limit: 30
+  install: {}
+  uninstall: {}
+files:
+  - install-cosign.sh
+  - uninstall-cosign.sh
+  - install-cosign.ps1
+  - uninstall-cosign.ps1
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
+  # The project publishes no Windows arm64 binary.
+  - os: windows
+    arch: amd64
