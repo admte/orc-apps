@@ -1,0 +1,35 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: android-sdk
+  org.opencontainers.image.description: Prepare a node to build Android projects - SDK command-line tools with licences accepted
+  org.opencontainers.image.source: https://developer.android.com/tools
+config:
+  # No `versions`: Google publishes no version list for the command-line tools —
+  # the build number lives in the filename and the only machine-readable source
+  # is the repository index, which names exactly one current build. And the SDK
+  # components a project needs (`platforms;android-36`, `build-tools;36.0.0`)
+  # are pinned in its Gradle files and fetched by sdkmanager when it builds, so
+  # there is nothing here for an operator to choose.
+  #
+  # No `params`: there is nothing to configure.
+  #
+  # The command-line tools archive is about 180 MB, and accepting the licences
+  # runs a JVM; 600s can be tight on a slow link.
+  install:
+    timeout: 1800s
+  # Removes /opt/android-sdk, which is this app's own tree — the same line `go`,
+  # `node` and `java` draw around theirs.
+  uninstall: {}
+files:
+  - install-android-sdk.sh
+  - uninstall-android-sdk.sh
+  - install-android-sdk.ps1
+  - uninstall-android-sdk.ps1
+platforms:
+  # x86-64 only: the command-line tools are Java and portable, but the SDK
+  # components a build then installs — adb, aapt2, the build-tools — are
+  # published for x86-64 alone on Linux.
+  - os: linux
+    arch: amd64
+  - os: windows
+    arch: amd64
