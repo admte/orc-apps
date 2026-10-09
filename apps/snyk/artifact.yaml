@@ -1,0 +1,37 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: snyk
+  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  org.opencontainers.image.description: Snyk CLI for dependency, container and IaC scanning
+  org.opencontainers.image.source: https://snyk.io
+config:
+  versions:
+    # Shaped after `java`, `node` and `go`, whose version lists work: a JSON endpoint,
+    # the field holding the version string, and a pattern whose named `version` group
+    # extracts it. GitHub's releases endpoint returns the array directly, so no `select`
+    # is needed, as with node's nodejs.org/dist/index.json.
+    #
+    # Snyk releases many times a week, so one entry per minor keeps the list readable
+    # instead of showing thirty builds of the same fortnight.
+    source: json
+    url: "https://api.github.com/repos/snyk/cli/releases?per_page=100"
+    field: tag_name
+    filter:
+      pattern: '^v(?P<version>\d+\.\d+\.\d+)$'
+      latest_per: minor
+      limit: 30
+  install: {}
+  uninstall: {}
+files:
+  - install-snyk.sh
+  - uninstall-snyk.sh
+  - install-snyk.ps1
+  - uninstall-snyk.ps1
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
+  # The project publishes no Windows arm64 binary.
+  - os: windows
+    arch: amd64
