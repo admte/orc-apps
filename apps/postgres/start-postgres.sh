@@ -142,6 +142,79 @@ stage_tls() {
 	pg_note "staged the TLS material dir=$TLS_DIR ca=$PG_HAVE_CA"
 }
 
+# Memory and WAL sizes from this machine, in MB, into TUNE_* for write_config.
+#   shared_buffers        25 % of memory
+#   effective_cache_size  75 % of memory
+#   maintenance_work_mem  1/16 of memory, 64 MB to 1 GB
+#   max_wal_size          a quarter of the data directory's file system, 96 MB to 8 GB:
+#                         room for bulk loads to checkpoint on time rather than on size,
+#                         without letting pg_wal take over a small volume
+#   min_wal_size          an eighth of that, at least 32 MB (two segments)
+size_from_machine() {
+	mem_kb=$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo 2>/dev/null || true)
+	case "$mem_kb" in '' | *[!0-9]*) mem_kb=1048576 ;; esac
+	mem_mb=$((mem_kb / 1024))
+	TUNE_SHARED_BUFFERS_MB=$((mem_mb / 4))
+	[ "$TUNE_SHARED_BUFFERS_MB" -ge 16 ] || TUNE_SHARED_BUFFERS_MB=16
+	TUNE_CACHE_MB=$((mem_mb * 3 / 4))
+	[ "$TUNE_CACHE_MB" -ge 64 ] || TUNE_CACHE_MB=64
+	TUNE_MAINTENANCE_MB=$(clamp $((mem_mb / 16)) 64 1024)
+
+	fs_kb=$(df -Pk "$1" 2>/dev/null | awk 'NR == 2 { print $2 }')
+	case "$fs_kb" in '' | *[!0-9]*) fs_kb=4194304 ;; esac
+	TUNE_MAX_WAL_MB=$(clamp $((fs_kb / 1024 / 4)) 96 8192)
+	TUNE_MIN_WAL_MB=$(clamp $((TUNE_MAX_WAL_MB / 8)) 32 1024)
+	pg_note "sized from the machine memory=${mem_mb}MB fs=$((fs_kb / 1024))MB shared_buffers=${TUNE_SHARED_BUFFERS_MB}MB effective_cache_size=${TUNE_CACHE_MB}MB max_wal_size=${TUNE_MAX_WAL_MB}MB"
+}
+
+clamp() {
+	if [ "$1" -lt "$2" ]; then
+		echo "$2"
+	elif [ "$1" -gt "$3" ]; then
+		echo "$3"
+	else
+		echo "$1"
+	fi
+}
+
+# WAL kept for replicas by size. A node with no CA cannot have replicas, and neither can
+# a node 1 whose peers list names only itself; either keeps none.
+wal_keep_size() {
+	if [ "$PG_HAVE_CA" != yes ] || [ "$(peer_count)" -le 1 ]; then
+		echo 0
+	else
+		echo 1GB
+	fi
+}
+
+# How many nodes the database has, node 1 included, from the peers list; 0 when no list
+# was supplied, which says nothing either way.
+peer_count() {
+	if [ -s "$PEERS_CACHE" ]; then
+		grep -c . "$PEERS_CACHE" || true
+	else
+		echo 0
+	fi
+}
+
+# The peers list arrives as a file that may be withdrawn once the app has started, and a
+# later service-manager restart must still see it. So each start that is handed one
+# keeps a copy outside the durable root, and a start without one uses that copy.
+stage_peers() {
+	mkdir -p "$STATE_DIR"
+	chmod 0700 "$STATE_DIR"
+	if [ -n "${PEERS_FILE:-}" ] && [ -r "$PEERS_FILE" ]; then
+		tr -d '\r' <"$PEERS_FILE" | sed '/^[[:space:]]*$/d' >"$PEERS_CACHE.new"
+		mv -f "$PEERS_CACHE.new" "$PEERS_CACHE"
+	elif [ -n "${PEERS:-}" ]; then
+		printf '%s\n' "$PEERS" | tr -d '\r' | sed '/^[[:space:]]*$/d' >"$PEERS_CACHE.new"
+		mv -f "$PEERS_CACHE.new" "$PEERS_CACHE"
+	fi
+	if [ -s "$PEERS_CACHE" ]; then
+		pg_note "peers: $(tr '\n' ' ' <"$PEERS_CACHE")"
+	fi
+}
+
 # The settings this app owns, written to an include directory so the files initdb (or
 # pg_basebackup) produced stay untouched, and regenerated on every start. A replica
 # reads the same file; its standby role comes from standby.signal and the
@@ -151,6 +224,7 @@ write_config() {
 	pgdata=$1
 	conf_dir="$pgdata/conf.d"
 	mkdir -p "$conf_dir"
+	size_from_machine "$pgdata"
 	if ! grep -q "^include_dir = 'conf.d'" "$pgdata/postgresql.conf"; then
 		printf "\n# Settings managed by the postgres app.\ninclude_dir = 'conf.d'\n" >>"$pgdata/postgresql.conf"
 	fi
@@ -168,13 +242,24 @@ ssl_key_file = '$TLS_DIR/server.key'
 ssl_min_protocol_version = 'TLSv1.2'
 password_encryption = scram-sha-256
 
-# Streaming replication to the other nodes. WAL is kept by size rather than by
-# replication slot: a replica rebuilds itself from scratch on every start anyway, and a
-# slot left behind by a dead replica would fill the writer's disk.
+# Streaming replication to the other nodes. A lone node keeps no WAL for anyone, so
+# its pg_wal (and every capture of it) holds only what crash recovery needs.
 wal_level = replica
 max_wal_senders = 16
-wal_keep_size = '1GB'
+wal_keep_size = '$(wal_keep_size)'
 hot_standby = on
+
+# Sized from this machine: memory for the caches, the data directory's file system for
+# WAL. The defaults are for a 128 MB machine; a 1 GB max_wal_size made a bulk load
+# checkpoint every few seconds. Change any of them with ALTER SYSTEM, which is read
+# after this file.
+shared_buffers = '${TUNE_SHARED_BUFFERS_MB}MB'
+effective_cache_size = '${TUNE_CACHE_MB}MB'
+maintenance_work_mem = '${TUNE_MAINTENANCE_MB}MB'
+max_wal_size = '${TUNE_MAX_WAL_MB}MB'
+min_wal_size = '${TUNE_MIN_WAL_MB}MB'
+checkpoint_timeout = '15min'
+checkpoint_completion_target = 0.9
 
 # Logs go to the service's stderr, where the supervisor collects them.
 log_destination = 'stderr'
@@ -379,6 +464,7 @@ exec_postgres() {
 }
 
 stage_tls
+stage_peers
 if pg_is_writer; then
 	start_primary
 else
