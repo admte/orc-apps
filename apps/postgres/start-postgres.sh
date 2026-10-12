@@ -7,35 +7,54 @@ set -eu
 #
 # One node or many, the rule is the same: the node holding slot 1 is the writer, keeps
 # its cluster in the durable root, and owns the application role and database. Every
-# other node is a streaming replica that rebuilds itself from the writer on each start
-# and keeps its copy outside the durable root, so only the writer's data is worth
-# capturing. With no SLOT set there is nothing to tell apart, so the node is slot 1 and
-# runs alone.
+# other node is a streaming replica of it. With no SLOT set there is nothing to tell
+# apart, so the node is slot 1 and runs alone. How node 1 makes sure it holds the newest
+# data before it takes writes, and why a replica never throws away data node 1 lacks, is
+# "Recovery and durability" in README.md; this script is that contract.
 #
 # Authentication: the postgres superuser has no password and is reachable over the Unix
 # socket alone. The application role uses SCRAM, and TLS is always on -- a server
 # certificate is generated on first start when none is supplied. Replication is
 # authenticated by certificate: a replica presents a client certificate, and the writer
 # accepts it if the configured CA issued it, so no replication secret is shared.
+#
+# This script never exits non-zero for a reason that would recur. An orchestrator may
+# replace a machine whose app keeps failing, and a replaced replica takes its data with
+# it; so a start that cannot go on says why in the log and holds, and a restart (after
+# the cause is fixed) tries again. While it holds or waits, nothing listens for clients.
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PG_PHASE=start
 # shellcheck source=postgres-common.sh
 . "$SCRIPT_DIR/postgres-common.sh"
+# shellcheck source=postgres-position.sh
+. "$SCRIPT_DIR/postgres-position.sh"
 
-# The reconciliation postmaster's log, in the app's own root rather than the distro's
+pg_hold() {
+	pg_note "HOLD: $*"
+	pg_note "HOLD: this node stays down until the app is restarted"
+	while :; do
+		sleep 600
+		pg_note "HOLD: $*"
+	done
+}
+pg_fail() {
+	pg_hold "$@"
+}
+
+# The bootstrap postmaster's log, in the app's own root rather than the distro's
 # /var/log/postgresql, which belongs to the package and may not exist.
 BOOTSTRAP_LOG="$APP_ROOT/bootstrap.log"
-# How long a replica keeps trying to seed from the writer before giving up and letting
-# the service manager restart it. A replica started before its writer simply waits here.
-SEED_TIMEOUT=${SEED_TIMEOUT:-1800}
 SEED_INTERVAL=${SEED_INTERVAL:-10}
 # Set by stage_tls: whether a CA was supplied, which is what makes certificate
 # authentication -- and therefore replication -- possible.
 PG_HAVE_CA=no
+PG_HAVE_CLIENT=no
 
-[ "$(id -u)" -eq 0 ] || pg_fail "must run as root"
-pg_need setpriv
+if [ "$(id -u)" -ne 0 ] && [ "$(id -un)" != "$PG_OS_USER" ]; then
+	pg_fail "must run as root"
+fi
+[ "$(id -u)" -ne 0 ] || pg_need setpriv
 [ -x "$PG_BIN/postgres" ] || pg_fail "no install found; install must run first bin=$PG_BIN"
 id "$PG_OS_USER" >/dev/null 2>&1 || pg_fail "the $PG_OS_USER account is missing"
 
@@ -51,7 +70,6 @@ case "$MAX_CONNECTIONS" in
 '' | *[!0-9]*) pg_fail "MAX_CONNECTIONS must be a positive integer, got '$MAX_CONNECTIONS'" ;;
 esac
 [ "$MAX_CONNECTIONS" -ge 1 ] || pg_fail "MAX_CONNECTIONS must be a positive integer, got '$MAX_CONNECTIONS'"
-CLUSTER_NAME=${POOL:-postgres}
 
 # The application password, from the sensitive param's file, or empty when none was
 # supplied this start. Read here, before the exec: the file may be withdrawn once the
@@ -78,7 +96,7 @@ stage_pem() {
 	fi
 	cat "$src" >"$dest"
 	chmod 0600 "$dest"
-	chown "$PG_OS_USER:$PG_OS_USER" "$dest"
+	chown "$PG_OS_USER:" "$dest"
 	return 0
 }
 
@@ -100,13 +118,13 @@ generate_server_cert() {
 		-keyout "$TLS_DIR/server.key" -out "$TLS_DIR/server.crt" >/dev/null 2>&1 ||
 		pg_fail "could not generate a self-signed server certificate"
 	chmod 0600 "$TLS_DIR/server.key" "$TLS_DIR/server.crt"
-	chown "$PG_OS_USER:$PG_OS_USER" "$TLS_DIR/server.key" "$TLS_DIR/server.crt"
+	chown "$PG_OS_USER:" "$TLS_DIR/server.key" "$TLS_DIR/server.crt"
 	: >"$TLS_DIR/server.self-signed"
 }
 
 stage_tls() {
 	mkdir -p "$TLS_DIR"
-	chown "$PG_OS_USER:$PG_OS_USER" "$TLS_DIR"
+	chown "$PG_OS_USER:" "$TLS_DIR"
 	chmod 0700 "$TLS_DIR"
 
 	if stage_pem CA_FILE ca.pem; then
@@ -126,9 +144,11 @@ stage_tls() {
 		generate_server_cert
 	fi
 
-	# Only a replica dials the writer, so the client identity is required on other nodes
-	# and unused on the writer.
-	if ! stage_pem CLIENT_CERT_FILE client.crt || ! stage_pem CLIENT_KEY_FILE client.key; then
+	# A replica dials the writer, so the client identity is required there; node 1 uses it
+	# only to ask the other nodes where their data ends, which it checks for itself.
+	if stage_pem CLIENT_CERT_FILE client.crt && stage_pem CLIENT_KEY_FILE client.key; then
+		PG_HAVE_CLIENT=yes
+	else
 		drop_pem client.crt
 		drop_pem client.key
 		if ! pg_is_writer; then
@@ -139,14 +159,14 @@ stage_tls() {
 	if ! pg_is_writer && [ "$PG_HAVE_CA" != yes ]; then
 		pg_fail "node $PG_SLOT is a replica: it needs ca to verify the writer"
 	fi
-	pg_note "staged the TLS material dir=$TLS_DIR ca=$PG_HAVE_CA"
+	pg_note "staged the TLS material dir=$TLS_DIR ca=$PG_HAVE_CA client=$PG_HAVE_CLIENT"
 }
 
 # Memory and WAL sizes from this machine, in MB, into TUNE_* for write_config.
 #   shared_buffers        25 % of memory
 #   effective_cache_size  75 % of memory
 #   maintenance_work_mem  1/16 of memory, 64 MB to 1 GB
-#   max_wal_size          a quarter of the data directory's file system, 96 MB to 8 GB:
+#   max_wal_size          a quarter of the data directory's file system, 96 MB to 4 GB:
 #                         room for bulk loads to checkpoint on time rather than on size,
 #                         without letting pg_wal take over a small volume
 #   min_wal_size          an eighth of that, at least 32 MB (two segments)
@@ -162,7 +182,7 @@ size_from_machine() {
 
 	fs_kb=$(df -Pk "$1" 2>/dev/null | awk 'NR == 2 { print $2 }')
 	case "$fs_kb" in '' | *[!0-9]*) fs_kb=4194304 ;; esac
-	TUNE_MAX_WAL_MB=$(clamp $((fs_kb / 1024 / 4)) 96 8192)
+	TUNE_MAX_WAL_MB=$(clamp $((fs_kb / 1024 / 4)) 96 4096)
 	TUNE_MIN_WAL_MB=$(clamp $((TUNE_MAX_WAL_MB / 8)) 32 1024)
 	pg_note "sized from the machine memory=${mem_mb}MB fs=$((fs_kb / 1024))MB shared_buffers=${TUNE_SHARED_BUFFERS_MB}MB effective_cache_size=${TUNE_CACHE_MB}MB max_wal_size=${TUNE_MAX_WAL_MB}MB"
 }
@@ -174,16 +194,6 @@ clamp() {
 		echo "$3"
 	else
 		echo "$1"
-	fi
-}
-
-# WAL kept for replicas by size. A node with no CA cannot have replicas, and neither can
-# a node 1 whose peers list names only itself; either keeps none.
-wal_keep_size() {
-	if [ "$PG_HAVE_CA" != yes ] || [ "$(peer_count)" -le 1 ]; then
-		echo 0
-	else
-		echo 1GB
 	fi
 }
 
@@ -202,7 +212,7 @@ peer_count() {
 # keeps a copy outside the durable root, and a start without one uses that copy.
 stage_peers() {
 	mkdir -p "$STATE_DIR"
-	chmod 0700 "$STATE_DIR"
+	chmod 0755 "$STATE_DIR"
 	if [ -n "${PEERS_FILE:-}" ] && [ -r "$PEERS_FILE" ]; then
 		tr -d '\r' <"$PEERS_FILE" | sed '/^[[:space:]]*$/d' >"$PEERS_CACHE.new"
 		mv -f "$PEERS_CACHE.new" "$PEERS_CACHE"
@@ -215,18 +225,51 @@ stage_peers() {
 	fi
 }
 
+
+# The other nodes of the database, one per line: the peers list without this node.
+# Node 1 is recognised as WRITER (peers.first names it); any other node by the slot
+# number its name ends with ({pool}-{N}.…).
+other_peers() {
+	[ -s "$PEERS_CACHE" ] || return 0
+	while IFS= read -r peer; do
+		[ -n "$peer" ] || continue
+		[ "$peer" = "${WRITER:-}" ] && pg_is_writer && continue
+		[ "$(peer_slot "$peer")" = "$PG_SLOT" ] && continue
+		echo "$peer"
+	done <"$PEERS_CACHE"
+}
+
+# The slot number a peer's name carries ({pool}-{N}.…), or nothing for a name that
+# carries none.
+peer_slot() {
+	label=${1%%.*}
+	label=${label%%:*}
+	case "$label" in
+	*-[0-9]*)
+		n=${label##*-}
+		case "$n" in '' | *[!0-9]*) ;; *) echo "$n" ;; esac
+		;;
+	esac
+}
+
 # The settings this app owns, written to an include directory so the files initdb (or
-# pg_basebackup) produced stay untouched, and regenerated on every start. A replica
-# reads the same file; its standby role comes from standby.signal and the
-# primary_conninfo pg_basebackup -R wrote into postgresql.auto.conf, which is read after
-# this directory and so is never overridden here.
+# pg_basebackup) produced stay untouched, and regenerated on every start. The role decides
+# the rest: a primary has no standby settings; a standby streams from node 1 through its
+# replication slot; a parked standby has nothing to stream from. postgresql.auto.conf is
+# read after this directory, so any connection settings an older version or a copy left
+# there are removed first.
 write_config() {
 	pgdata=$1
+	role=$2
 	conf_dir="$pgdata/conf.d"
 	mkdir -p "$conf_dir"
 	size_from_machine "$pgdata"
 	if ! grep -q "^include_dir = 'conf.d'" "$pgdata/postgresql.conf"; then
 		printf "\n# Settings managed by the postgres app.\ninclude_dir = 'conf.d'\n" >>"$pgdata/postgresql.conf"
+	fi
+	if [ -f "$pgdata/postgresql.auto.conf" ]; then
+		sed -i '/^[[:space:]]*primary_conninfo[[:space:]]*=/d; /^[[:space:]]*primary_slot_name[[:space:]]*=/d' \
+			"$pgdata/postgresql.auto.conf"
 	fi
 	cat >"$conf_dir/orc.conf" <<CONF
 # Written by the postgres app on every start. Edits here are lost on restart.
@@ -242,12 +285,19 @@ ssl_key_file = '$TLS_DIR/server.key'
 ssl_min_protocol_version = 'TLSv1.2'
 password_encryption = scram-sha-256
 
-# Streaming replication to the other nodes. A lone node keeps no WAL for anyone, so
-# its pg_wal (and every capture of it) holds only what crash recovery needs.
+# Streaming replication. Each replica holds a physical slot on node 1 (replica_<N>), so
+# node 1 keeps exactly the WAL its replicas still need; no extra WAL is kept by size, so
+# a lone node's pg_wal (and every capture of it) holds only what crash recovery needs.
+# The slot's hold is bounded: past max_slot_wal_keep_size node 1 gives the slot up
+# rather than fill its disk, and that replica re-seeds.
 wal_level = replica
 max_wal_senders = 16
-wal_keep_size = '$(wal_keep_size)'
+max_replication_slots = 16
+wal_keep_size = 0
+max_slot_wal_keep_size = '${TUNE_MAX_WAL_MB}MB'
 hot_standby = on
+hot_standby_feedback = on
+recovery_target_timeline = 'latest'
 
 # Sized from this machine: memory for the caches, the data directory's file system for
 # WAL. The defaults are for a 128 MB machine; a 1 GB max_wal_size made a bulk load
@@ -269,6 +319,26 @@ CONF
 	if [ "$PG_HAVE_CA" = yes ]; then
 		echo "ssl_ca_file = '$TLS_DIR/ca.pem'" >>"$conf_dir/orc.conf"
 	fi
+
+	rm -f "$conf_dir/orc-standby.conf"
+	case "$role" in
+	primary)
+		rm -f "$pgdata/standby.signal" "$pgdata/recovery.signal"
+		;;
+	standby)
+		{
+			echo "# Written by the postgres app on every start. Edits here are lost on restart."
+			echo "primary_conninfo = '$(writer_conninfo)'"
+			echo "primary_slot_name = '$(slot_name "$PG_SLOT")'"
+		} >"$conf_dir/orc-standby.conf"
+		: >"$pgdata/standby.signal"
+		;;
+	parked | recovering)
+		# A standby with nothing to stream from: it replays what it holds and serves it
+		# read-only, and answers where its data ends.
+		: >"$pgdata/standby.signal"
+		;;
+	esac
 
 	# Order matters: the first matching line decides. The superuser and the replication
 	# role are refused over the network before the general rules, so neither can be
@@ -293,103 +363,342 @@ HBA
 	fi
 	hba_line hostssl all all all scram-sha-256
 
-	# Any client certificate the configured CA issued may replicate; which certificates
-	# exist is the CA's business, not this file's. Scope the CA accordingly.
+	write_ident "$pgdata"
+	chown -R "$PG_OS_USER:" "$conf_dir" "$pgdata/postgresql.conf" "$pgdata/pg_hba.conf" "$pgdata/pg_ident.conf"
+	[ ! -e "$pgdata/standby.signal" ] || chown "$PG_OS_USER:" "$pgdata/standby.signal"
+	chmod 0600 "$pgdata/pg_hba.conf" "$pgdata/pg_ident.conf"
+}
+
+# Any client certificate the configured CA issued may replicate; which certificates
+# exist is the CA's business, not this file's. Scope the CA accordingly.
+write_ident() {
 	{
 		echo "# Written by the postgres app on every start. Edits here are lost on restart."
 		printf '%-14s %-18s %s\n' "# MAPNAME" SYSTEM-USERNAME PG-USERNAME
 		printf '%-14s %-18s %s\n' "$IDENT_MAP" '/^.*$' "$REPLICATION_ROLE"
-	} >"$pgdata/pg_ident.conf"
-	chown -R "$PG_OS_USER:$PG_OS_USER" "$conf_dir" "$pgdata/postgresql.conf" "$pgdata/pg_hba.conf" "$pgdata/pg_ident.conf"
-	chmod 0600 "$pgdata/pg_hba.conf" "$pgdata/pg_ident.conf"
+	} >"$1/pg_ident.conf"
 }
 
-# Creates or repairs the writer's cluster in the durable root, then reconciles the roles
-# and the database over the Unix socket on a postmaster started for that purpose alone
-# (no TCP listener), which is stopped again before the real one is exec'd.
+
+
+prepare_dir() {
+	mkdir -p "$1"
+	chown "$PG_OS_USER:" "$1"
+	chmod 0700 "$1"
+}
+
+# A cluster's system identifier, from its control file.
+cluster_sysid() {
+	LC_ALL=C pg_as_postgres "$PG_BIN/pg_controldata" -D "$1" 2>/dev/null |
+		sed -n 's/^Database system identifier:[[:space:]]*//p'
+}
+
+# Stops a postmaster this script started on the given directory, if one runs.
+stop_server() {
+	if pg_running "$1"; then
+		pg_as_postgres "$PG_BIN/pg_ctl" stop -w -t 300 -s -m fast -D "$1" >/dev/null 2>&1 || true
+	fi
+}
+
+# A postmaster on the given directory for this script's own use: Unix socket only, so
+# no client and no other node can reach it.
+start_private() {
+	pgdata=$1
+	shift
+	mkdir -p "$(dirname "$BOOTSTRAP_LOG")"
+	: >"$BOOTSTRAP_LOG"
+	chown "$PG_OS_USER:" "$BOOTSTRAP_LOG"
+	pg_as_postgres "$PG_BIN/pg_ctl" start -w -t 3600 -s -D "$pgdata" -l "$BOOTSTRAP_LOG" \
+		-o "-c listen_addresses='' -c unix_socket_directories='$PG_SOCKET_DIR' $*"
+}
+
+psql_local() {
+	pg_as_postgres "$PG_BIN/psql" -X -q -w -h "$PG_SOCKET_DIR" -p "$PG_PORT" "$@"
+}
+
+# ---------------------------------------------------------------------------------------
+# Node 1
+
 start_primary() {
 	pgdata=$PRIMARY_PGDATA
 	pg_note "node 1: this node is the writer pgdata=$pgdata"
-
-	mkdir -p "$PRIMARY_ROOT"
-	chown "$PG_OS_USER:$PG_OS_USER" "$PRIMARY_ROOT"
-	chmod 0700 "$PRIMARY_ROOT"
-
+	prepare_dir "$PRIMARY_ROOT"
 	password=$(app_password)
+	promote=no
 
 	if [ -s "$pgdata/PG_VERSION" ]; then
 		have=$(tr -d '\r\n' <"$pgdata/PG_VERSION")
 		[ "$have" = "$PG_MAJOR" ] || pg_fail "the stored cluster is PostgreSQL $have; this app runs $PG_MAJOR and does not upgrade in place"
-		# A restored or crash-stopped cluster may carry a pid file from a postmaster that
-		# no longer exists. Only a file no running server accounts for is removed.
-		if [ -e "$pgdata/postmaster.pid" ] && ! pg_running "$pgdata"; then
-			pg_note "removing a stale postmaster.pid"
-			rm -f "$pgdata/postmaster.pid"
-		fi
-		if [ "$(stat -c %U "$pgdata")" != "$PG_OS_USER" ]; then
-			pg_note "taking ownership of the stored cluster for $PG_OS_USER"
-			chown -R "$PG_OS_USER:$PG_OS_USER" "$pgdata"
-		fi
-		chmod 0700 "$pgdata"
-		pg_note "using the existing cluster"
-	else
-		[ -n "$password" ] || pg_fail "a password is required to create the cluster; pass it as a file, e.g. --password=@/path/to/file"
-		if [ -d "$pgdata" ] && [ -n "$(ls -A "$pgdata")" ]; then
-			pg_fail "$pgdata holds files but no PostgreSQL cluster; refusing to initialize over them"
-		fi
-		mkdir -p "$pgdata"
-		chown "$PG_OS_USER:$PG_OS_USER" "$pgdata"
-		chmod 0700 "$pgdata"
-		pg_note "initializing a new cluster"
-		# No --pwfile: the superuser gets no password, on purpose. Host access is closed
-		# until pg_hba.conf is written below.
-		pg_as_postgres "$PG_BIN/initdb" -D "$pgdata" \
-			--auth-local=peer --auth-host=reject \
-			--encoding=UTF8 --locale=C.UTF-8 --data-checksums >&2
+		adopt_cluster "$pgdata"
 	fi
 
-	write_config "$pgdata"
-	if [ -n "$password" ]; then
-		reconcile_roles "$pgdata" "$password"
-		password=""
+	others=$(other_peers)
+	sysid=""
+	[ ! -s "$pgdata/PG_VERSION" ] || sysid=$(cluster_sysid "$pgdata")
+	if [ -n "$sysid" ] && [ -s "$WRITER_OPEN" ] && [ "$(cat "$WRITER_OPEN")" = "$sysid" ]; then
+		pg_note "this machine opened this cluster before; its data is the newest, asking nobody"
+	elif [ -z "$others" ]; then
+		pg_note "no other nodes listed; this node's data is the database's"
 	else
-		pg_note "no password supplied this start; leaving the existing roles as they are"
+		if [ "$PG_HAVE_CA" != yes ] || [ "$PG_HAVE_CLIENT" != yes ]; then
+			pg_fail "node 1 must ask the other nodes where their data ends, which needs ca, client_cert and client_key"
+		fi
+		: >"$RECOVERING"
+		writer_decide "$pgdata" "$others"
 	fi
 
+	if [ ! -s "$pgdata/PG_VERSION" ]; then
+		init_cluster "$pgdata" "$password"
+	fi
+
+	write_config "$pgdata" primary
+	[ "$promote" = no ] || : >"$pgdata/standby.signal"
+	open_session "$pgdata" "$password" "$promote"
+	password=""
+	cluster_sysid "$pgdata" >"$WRITER_OPEN"
+	rm -f "$RECOVERING"
 	pg_note "starting the writer"
 	exec_postgres "$pgdata"
 }
 
-# Roles and the database, reconciled on a socket-only postmaster. psql variables carry
-# the names: `:'name'` interpolates a properly quoted literal and format(%I) turns it
-# into an identifier server-side, so no value is spliced into SQL by the shell. The
-# password never touches argv: psql reads it from a file only the postgres account can
-# open, which is removed again before the real postmaster starts.
-reconcile_roles() {
+# A restored or crash-stopped cluster may carry a pid file from a postmaster that no
+# longer exists, and a restore may have changed its owner.
+adopt_cluster() {
+	if [ -e "$1/postmaster.pid" ] && ! pg_running "$1"; then
+		pg_note "removing a stale postmaster.pid"
+		rm -f "$1/postmaster.pid"
+	fi
+	if [ "$(stat -c %U "$1")" != "$PG_OS_USER" ]; then
+		pg_note "taking ownership of the stored cluster for $PG_OS_USER"
+		chown -R "$PG_OS_USER:" "$1"
+	fi
+	chmod 0700 "$1"
+}
+
+init_cluster() {
+	pgdata=$1
+	[ -n "$2" ] || pg_fail "a password is required to create the cluster; pass it as a file, e.g. --password=@/path/to/file"
+	if [ -d "$pgdata" ] && [ -n "$(ls -A "$pgdata")" ]; then
+		pg_fail "$pgdata holds files but no PostgreSQL cluster; refusing to initialize over them"
+	fi
+	prepare_dir "$pgdata"
+	pg_note "initializing a new cluster"
+	# No --pwfile: the superuser gets no password, on purpose. Host access is closed
+	# until pg_hba.conf is written.
+	pg_as_postgres "$PG_BIN/initdb" -D "$pgdata" \
+		--auth-local=peer --auth-host=reject \
+		--encoding=UTF8 --locale=C.UTF-8 --data-checksums >&2 ||
+		pg_fail "initdb failed"
+}
+
+# Node 1 without proof that it holds the newest data: ask every other node where its
+# data ends, and go on only when every node that may hold newer data has answered.
+# Leaves the cluster to open in $pgdata (or nothing, for a new database) and sets
+# promote=yes when existing data must start a new timeline before it opens.
+writer_decide() {
+	pgdata=$1
+	others=$2
+	ask_dir="$STATE_DIR/ask"
+	pause=5
+	round=0
+	while :; do
+		round=$((round + 1))
+		rm -rf "$ask_dir"
+		mkdir -p "$ask_dir"
+
+		have_local=no
+		if [ -s "$pgdata/PG_VERSION" ]; then
+			if pg_local_position "$pgdata"; then
+				have_local=yes
+				local_desc=$(pg_show_position "$LOCAL_SYSID" "$LOCAL_TLI" "$LOCAL_LSN")
+			else
+				pg_fail "the cluster in $pgdata has a control file that cannot be read; move it away by hand to let this node decide again"
+			fi
+		elif [ -d "$pgdata" ] && [ -n "$(ls -A "$pgdata" 2>/dev/null)" ]; then
+			pg_fail "$pgdata holds files but no PostgreSQL cluster; move them away by hand to let this node decide again"
+		fi
+
+		unknown="" report="" candidates=0 n=0
+		for peer in $others; do
+			n=$((n + 1))
+			pg_ask_peer "$peer"
+			case "$ASK_KIND" in
+			unknown)
+				unknown="$unknown $peer"
+				report="$report; $peer: unknown, $ASK_REASON"
+				;;
+			empty)
+				report="$report; $peer: empty"
+				;;
+			data)
+				desc=$(pg_show_position "$ASK_SYSID" "$ASK_TLI" "$ASK_LSN")
+				CONTAINS_HISTORY=$LOCAL_HISTORY
+				if [ "$have_local" = yes ] &&
+					pg_contains "$LOCAL_SYSID" "$LOCAL_TLI" "$LOCAL_LSN" "$ASK_SYSID" "$ASK_TLI" "$ASK_LSN"; then
+					report="$report; $peer: $desc, contained in this node's"
+				else
+					CONTAINS_HISTORY=$ASK_HISTORY
+					if [ "$have_local" = no ] ||
+						pg_contains "$ASK_SYSID" "$ASK_TLI" "$ASK_LSN" "$LOCAL_SYSID" "$LOCAL_TLI" "$LOCAL_LSN"; then
+						report="$report; $peer: $desc, newer"
+						candidates=$((candidates + 1))
+						echo "$peer $ASK_SYSID $ASK_TLI $ASK_LSN" >"$ask_dir/$candidates"
+						printf '%s\n' "$ASK_HISTORY" >"$ask_dir/$candidates.history"
+					else
+						report="$report; $peer: $desc, DIVERGED from this node's data (not used)"
+					fi
+				fi
+				;;
+			esac
+		done
+		if [ "$have_local" = yes ]; then
+			report="this node: $local_desc$report"
+		else
+			report="this node: no cluster$report"
+		fi
+
+		# The freshest candidate is the one containing every other; candidates that do
+		# not line up are a conflict only an operator can settle.
+		source="" conflict=no
+		i=1
+		while [ "$i" -le "$candidates" ]; do
+			read -r c_peer c_sysid c_tli c_lsn <"$ask_dir/$i"
+			CONTAINS_HISTORY=$(cat "$ask_dir/$i.history")
+			all=yes
+			j=1
+			while [ "$j" -le "$candidates" ]; do
+				read -r _ o_sysid o_tli o_lsn <"$ask_dir/$j"
+				pg_contains "$c_sysid" "$c_tli" "$c_lsn" "$o_sysid" "$o_tli" "$o_lsn" || all=no
+				j=$((j + 1))
+			done
+			if [ "$all" = yes ]; then
+				source=$i
+				break
+			fi
+			i=$((i + 1))
+		done
+		if [ "$candidates" -gt 0 ] && [ -z "$source" ]; then
+			conflict=yes
+		fi
+
+		forced=no
+		if [ -e "$FORCE_START" ]; then
+			rm -f "$FORCE_START"
+			forced=yes
+		fi
+
+		if [ "$forced" = no ] && { [ -n "$unknown" ] || [ "$conflict" = yes ]; }; then
+			count=$(echo "$unknown" | wc -w)
+			why="$count of $n nodes unknown"
+			[ "$conflict" = no ] || why="$why, and the nodes ahead of this one hold data that diverged from each other"
+			pg_note "WAIT round $round: $why: $report; asking again in ${pause}s; to stop waiting: touch $FORCE_START"
+			sleep "$pause"
+			pause=$((pause * 2))
+			[ "$pause" -le 60 ] || pause=60
+			continue
+		fi
+
+		if [ "$forced" = yes ]; then
+			pg_note "FORCED by $FORCE_START: going on without$unknown; writes only they hold are given up: $report"
+			if [ "$conflict" = yes ]; then
+				# Of candidates that diverged from each other, take the newest timeline,
+				# then the furthest position.
+				source=$(for f in "$ask_dir"/[0-9]*; do
+					case "$f" in *.history) continue ;; esac
+					read -r _ _ t l <"$f"
+					echo "$t $l $(basename "$f")"
+				done | sort -k1,1n -k2,2n | tail -n 1 | cut -d' ' -f3)
+			fi
+		else
+			pg_note "decided: $report"
+		fi
+
+		if [ -n "$source" ]; then
+			read -r c_peer c_sysid c_tli c_lsn <"$ask_dir/$source"
+			if [ "$have_local" = yes ]; then
+				pg_note "copying from $c_peer ($(pg_show_position "$c_sysid" "$c_tli" "$c_lsn"); this node $local_desc)"
+			else
+				pg_note "copying from $c_peer ($(pg_show_position "$c_sysid" "$c_tli" "$c_lsn"); this node holds no cluster)"
+			fi
+			if ! copy_from "$c_peer" "$pgdata"; then
+				pg_note "the copy from $c_peer failed; deciding again"
+				sleep "$pause"
+				continue
+			fi
+			promote=yes
+		elif [ "$have_local" = yes ]; then
+			promote=yes
+		elif [ "$forced" = yes ]; then
+			pg_note "FORCED with no data on any node that answered: creating a NEW, EMPTY database"
+		else
+			pg_note "no node holds data: creating a new database"
+		fi
+		rm -rf "$ask_dir"
+		return 0
+	done
+}
+
+# Replaces this node's cluster with a copy of a peer's. The local cluster is provably
+# contained in the source's (or absent), and the durable root holds one cluster, so it is
+# discarded first; the capture hook refuses while $RECOVERING exists, so the half-built
+# copy never becomes a restore point.
+copy_from() {
+	peer=$1
+	pgdata=$2
+	stop_server "$pgdata"
+	rm -rf "$pgdata"
+	prepare_dir "$pgdata"
+	log="$STATE_DIR/copy.log"
+	if ! pg_as_postgres "$PG_BIN/pg_basebackup" -D "$pgdata" -X stream --checkpoint=fast \
+		--no-password -d "$(pg_peer_conninfo "$peer")" 2>"$log"; then
+		pg_note "pg_basebackup from $peer failed: $(tail -n 3 "$log" | tr '\n' ' ')"
+		rm -rf "$pgdata"
+		prepare_dir "$pgdata"
+		return 1
+	fi
+	# The copy is of a standby: drop its standby settings, so it opens as nothing but
+	# what this node makes of it.
+	rm -f "$pgdata/standby.signal" "$pgdata/recovery.signal" "$pgdata/conf.d/orc-standby.conf"
+	pg_note "copied from $peer"
+	return 0
+}
+
+# One private session on node 1's cluster before it opens: replay and start a new
+# timeline when asked (promote=yes), reconcile the roles and the database when a password
+# was supplied, and hold a replication slot for every other node listed.
+open_session() {
 	pgdata=$1
 	password=$2
+	promote=$3
 	password_file="$TLS_DIR/app.password"
-	mkdir -p "$(dirname "$BOOTSTRAP_LOG")"
-	: >"$BOOTSTRAP_LOG"
-	chown "$PG_OS_USER:$PG_OS_USER" "$BOOTSTRAP_LOG"
-	(
-		umask 077
-		printf '%s' "$password" >"$password_file"
-	)
-	chown "$PG_OS_USER:$PG_OS_USER" "$password_file"
-	pg_note "reconciling roles and the database over the socket"
-	if ! pg_as_postgres "$PG_BIN/pg_ctl" start -w -t 300 -s -D "$pgdata" -l "$BOOTSTRAP_LOG" \
-		-o "-c listen_addresses='' -c unix_socket_directories='$PG_SOCKET_DIR'"; then
+	if [ -n "$password" ]; then
+		(
+			umask 077
+			printf '%s' "$password" >"$password_file"
+		)
+		chown "$PG_OS_USER:" "$password_file"
+	fi
+	if ! start_private "$pgdata"; then
 		rm -f "$password_file"
 		cat "$BOOTSTRAP_LOG" >&2
-		pg_fail "the cluster did not start for role reconciliation"
+		pg_fail "the cluster did not start"
 	fi
 	status=0
-	pg_as_postgres "$PG_BIN/psql" -X -q -w -v ON_ERROR_STOP=1 \
-		-h "$PG_SOCKET_DIR" -p "$PG_PORT" -d postgres \
-		-v replicator="$REPLICATION_ROLE" -v app_user="$APP_USER" -v app_db="$APP_DB" \
-		-v password_file="$password_file" \
-		>/dev/null <<'SQL' || status=$?
+	if [ "$promote" = yes ]; then
+		pg_note "replaying the data this node holds, then starting a new timeline"
+		if pg_as_postgres "$PG_BIN/pg_ctl" promote -w -t 3600 -s -D "$pgdata"; then
+			pg_note "on a new timeline: $(psql_local -d postgres -A -t -c "SELECT ('x' || substr(pg_walfile_name(pg_current_wal_lsn()), 1, 8))::bit(32)::int || ', at ' || pg_current_wal_lsn()" 2>/dev/null || echo '?')"
+		else
+			status=1
+			pg_note "promotion failed"
+		fi
+	fi
+	if [ "$status" -eq 0 ] && [ -n "$password" ]; then
+		pg_note "reconciling roles and the database over the socket"
+		psql_local -v ON_ERROR_STOP=1 -d postgres \
+			-v replicator="$REPLICATION_ROLE" -v app_user="$APP_USER" -v app_db="$APP_DB" \
+			-v password_file="$password_file" \
+			>/dev/null <<'SQL' || status=$?
 \set pw `cat :'password_file'`
 SELECT format('CREATE ROLE %I WITH REPLICATION LOGIN', :'replicator')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'replicator')
@@ -403,61 +712,276 @@ SELECT format('CREATE DATABASE %I OWNER %I', :'app_db', :'app_user')
 WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'app_db')
 \gexec
 SQL
+		[ "$status" -ne 0 ] || pg_note "roles reconciled role=$APP_USER db=$APP_DB replication_role=$REPLICATION_ROLE"
+	elif [ "$status" -eq 0 ]; then
+		pg_note "no password supplied this start; leaving the existing roles as they are"
+	fi
 	rm -f "$password_file"
-	pg_as_postgres "$PG_BIN/pg_ctl" stop -w -t 300 -s -m fast -D "$pgdata" || {
-		cat "$BOOTSTRAP_LOG" >&2
-		pg_fail "the reconciliation postmaster did not stop"
-	}
+	[ "$status" -ne 0 ] || reconcile_slots || status=$?
+	stop_server "$pgdata"
 	if [ "$status" -ne 0 ]; then
 		cat "$BOOTSTRAP_LOG" >&2
-		pg_fail "role reconciliation failed (psql exit $status)"
+		pg_fail "preparing the writer failed (exit $status)"
 	fi
-	pg_note "roles reconciled role=$APP_USER db=$APP_DB replication_role=$REPLICATION_ROLE"
 }
 
-# Rebuilds this replica from the writer and follows it. The old copy is discarded first:
-# a replica's data is a copy of the writer, so nothing in it is worth keeping, and a
-# fresh base backup is the one seed that is always consistent with the writer.
+# A slot per other node, so each replica's WAL is kept for it while it restarts. Slots of
+# nodes no longer listed are dropped once nothing streams from them; with no list, or a
+# name that carries no slot number, nothing is dropped.
+reconcile_slots() {
+	keep=""
+	complete=yes
+	for peer in $(other_peers); do
+		n=$(peer_slot "$peer")
+		if [ -z "$n" ]; then
+			complete=no
+			continue
+		fi
+		keep="$keep $(slot_name "$n")"
+	done
+	[ -s "$PEERS_CACHE" ] || complete=no
+	for slot in $keep; do
+		psql_local -v ON_ERROR_STOP=1 -d postgres -A -t -v slot="$slot" >/dev/null <<'SQL' || return 1
+SELECT pg_create_physical_replication_slot(:'slot', true)
+WHERE NOT EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = :'slot');
+SQL
+	done
+	if [ "$complete" = yes ]; then
+		for slot in $(psql_local -d postgres -A -t -c \
+			"SELECT slot_name FROM pg_replication_slots WHERE slot_type = 'physical' AND slot_name LIKE 'replica\\_%' AND NOT active"); do
+			case " $keep " in
+			*" $slot "*) ;;
+			*)
+				pg_note "dropping slot $slot: no such node any more"
+				psql_local -d postgres -c "SELECT pg_drop_replication_slot('$slot')" >/dev/null || true
+				;;
+			esac
+		done
+	fi
+	[ -z "$keep" ] || pg_note "replication slots:$keep"
+}
+
+# ---------------------------------------------------------------------------------------
+# Replicas
+
 start_replica() {
 	pgdata=$REPLICA_PGDATA
 	[ -n "${WRITER:-}" ] || pg_fail "node $PG_SLOT is a replica: set WRITER to the host name of the writer (node 1)"
 	pg_note "node $PG_SLOT: this node is a replica of $WRITER pgdata=$pgdata"
+	prepare_dir "$REPLICA_ROOT"
+	prepare_dir "$REPLICA_LOCAL"
+	rm -f "$RECOVERING" "$WRITER_OPEN"
 
-	rm -rf "$pgdata"
-	mkdir -p "$pgdata"
-	chown "$PG_OS_USER:$PG_OS_USER" "$(dirname "$pgdata")" "$pgdata"
-	chmod 0700 "$(dirname "$pgdata")" "$pgdata"
-
-	# verify-full: the writer's certificate has to be issued by the configured CA and
-	# carry the name this replica dialed.
-	conninfo="host=$WRITER port=$PG_PORT user=$REPLICATION_ROLE"
-	conninfo="$conninfo sslmode=verify-full sslrootcert=$TLS_DIR/ca.pem"
-	conninfo="$conninfo sslcert=$TLS_DIR/client.crt sslkey=$TLS_DIR/client.key"
-	conninfo="$conninfo application_name=$CLUSTER_NAME-$PG_SLOT"
-
-	deadline=$(($(date +%s) + SEED_TIMEOUT))
-	attempt=0
-	until pg_as_postgres "$PG_BIN/pg_basebackup" -D "$pgdata" -R -X stream --checkpoint=fast \
-		--no-password -d "$conninfo" 2>>"$APP_ROOT/replica/seed.log"; do
-		attempt=$((attempt + 1))
-		# A failed attempt may leave a partial copy behind.
-		find "$pgdata" -mindepth 1 -delete
-		if [ "$(date +%s)" -ge "$deadline" ]; then
-			tail -n 20 "$APP_ROOT/replica/seed.log" >&2
-			pg_fail "could not seed from $WRITER within ${SEED_TIMEOUT}s"
+	if [ -e "$RELEASE_PARKED" ]; then
+		rm -f "$RELEASE_PARKED"
+		if [ -e "$pgdata" ]; then
+			aside="$REPLICA_LOCAL/parked-$(date -u +%Y%m%dT%H%M%SZ)"
+			mv "$pgdata" "$aside"
+			pg_note "released by $RELEASE_PARKED: this replica's cluster is kept at $aside (remove it when done); seeding afresh"
 		fi
-		pg_note "seed attempt $attempt failed; the writer may not be up yet, retrying in ${SEED_INTERVAL}s: $(tail -n 1 "$APP_ROOT/replica/seed.log")"
-		sleep "$SEED_INTERVAL"
-	done
-	rm -f "$APP_ROOT/replica/seed.log"
-	pg_note "seeded from $WRITER"
+		rm -f "$PARKED"
+	fi
 
-	write_config "$pgdata"
-	pg_note "starting the replica"
-	exec_postgres "$pgdata"
+	have_local=no
+	if [ -s "$pgdata/PG_VERSION" ]; then
+		adopt_cluster "$pgdata"
+		if pg_local_position "$pgdata"; then
+			have_local=yes
+		else
+			aside="$REPLICA_LOCAL/unreadable-$(date -u +%Y%m%dT%H%M%SZ)"
+			rm -rf "$REPLICA_LOCAL"/unreadable-*
+			mv "$pgdata" "$aside"
+			pg_note "this replica's control file cannot be read; its files are kept at $aside and it seeds afresh"
+		fi
+	elif [ -d "$pgdata" ]; then
+		rm -rf "$pgdata"
+	fi
+
+	if [ "$have_local" = no ]; then
+		rm -f "$PARKED"
+		seed_replica "$pgdata"
+		follow "$pgdata"
+	fi
+
+	local_desc=$(pg_show_position "$LOCAL_SYSID" "$LOCAL_TLI" "$LOCAL_LSN")
+	pg_ask_peer "$WRITER"
+	case "$ASK_KIND" in
+	data)
+		desc=$(pg_show_position "$ASK_SYSID" "$ASK_TLI" "$ASK_LSN")
+		CONTAINS_HISTORY=$ASK_HISTORY
+		if pg_contains "$ASK_SYSID" "$ASK_TLI" "$ASK_LSN" "$LOCAL_SYSID" "$LOCAL_TLI" "$LOCAL_LSN"; then
+			rm -f "$PARKED"
+			pg_note "node 1 ($desc) contains this replica's data ($local_desc); keeping it"
+			if catch_up "$pgdata" "$ASK_LSN"; then
+				follow "$pgdata"
+			fi
+			pg_note "this replica cannot catch up from node 1 (the WAL it needs is gone); its data is contained in node 1's, so it seeds afresh"
+			rm -rf "$pgdata"
+			seed_replica "$pgdata"
+			follow "$pgdata"
+		fi
+		reason="this replica holds data node 1 does not: this replica $local_desc, node 1 $desc"
+		if [ "$ASK_SYSID" != "$LOCAL_SYSID" ]; then
+			reason="this replica holds another cluster than node 1's (system $LOCAL_SYSID, $local_desc; node 1 system $ASK_SYSID)"
+		fi
+		park "$pgdata" "$reason"
+		;;
+	*)
+		pg_note "node 1 does not answer ($ASK_REASON); keeping this replica's data ($local_desc) and following node 1 when it is back"
+		follow "$pgdata"
+		;;
+	esac
 }
 
+# Runs as a standby of node 1. Never returns.
+follow() {
+	write_config "$1" standby
+	pg_note "starting the replica"
+	exec_postgres "$1"
+}
+
+# Keeps the data, refuses to stream over it, and serves it read-only: an operator can read
+# it, a later node 1 can ask where it ends, and the readiness probe reports unready.
+park() {
+	printf '%s\n' "$2" >"$PARKED"
+	pg_note "PARKED: $2. The data is kept and served read-only; nothing streams into it. To discard it from this replica (it is moved aside, not deleted) and seed from node 1: touch $RELEASE_PARKED and restart the app"
+	write_config "$1" parked
+	exec_postgres "$1"
+}
+
+# Streams from node 1 on a private postmaster until this replica holds node 1's position
+# as it was when asked. Fails when streaming does not get there within CATCH_UP_TIMEOUT.
+catch_up() {
+	pgdata=$1
+	target=$2
+	timeout=${CATCH_UP_TIMEOUT:-120}
+	write_config "$pgdata" standby
+	ensure_slot
+	if ! start_private "$pgdata"; then
+		cat "$BOOTSTRAP_LOG" >&2
+		pg_fail "this replica's cluster did not start"
+	fi
+	deadline=$(($(date +%s) + timeout))
+	ok=no
+	while [ "$(date +%s)" -lt "$deadline" ]; do
+		row=$(psql_local -d postgres -A -t -c \
+			"SELECT status, COALESCE(flushed_lsn::text, '') FROM pg_stat_wal_receiver" 2>/dev/null || true)
+		status=${row%%|*}
+		flushed=${row#*|}
+		if [ "$status" = streaming ]; then
+			if [ "$LOCAL_LSN" -ge "$target" ] || { [ -n "$flushed" ] && [ "$(lsn_dec "$flushed")" -ge "$target" ]; }; then
+				ok=yes
+				break
+			fi
+		fi
+		sleep 2
+	done
+	stop_server "$pgdata"
+	if [ "$ok" = yes ]; then
+		pg_note "streaming from node 1 and caught up to $(lsn_hex "$target")"
+		return 0
+	fi
+	pg_note "not caught up within ${timeout}s: $(grep -E 'FATAL|ERROR' "$BOOTSTRAP_LOG" | tail -n 2 | tr '\n' ' ')"
+	return 1
+}
+
+
+# Copies node 1 into an empty data directory. Until node 1 answers, the stand-in answers
+# for this node as empty, so a node 1 deciding whether anyone holds newer data does not
+# wait on a node that holds none.
+seed_replica() {
+	pgdata=$1
+	log="$REPLICA_LOCAL/seed.log"
+	attempt=0
+	while :; do
+		standin_start
+		while :; do
+			pg_ask_peer "$WRITER"
+			[ "$ASK_KIND" != data ] || break
+			attempt=$((attempt + 1))
+			if [ $((attempt % 6)) -eq 1 ]; then
+				pg_note "waiting for node 1 to open before seeding ($ASK_REASON); this node answers as empty meanwhile"
+			fi
+			sleep "$SEED_INTERVAL"
+		done
+		standin_stop
+		prepare_dir "$pgdata"
+		slot_opt=""
+		if ensure_slot; then
+			slot_opt="-S $(slot_name "$PG_SLOT")"
+		fi
+		# shellcheck disable=SC2086 # slot_opt is two words or none
+		if pg_as_postgres "$PG_BIN/pg_basebackup" -D "$pgdata" -X stream --checkpoint=fast \
+			$slot_opt --no-password -d "$(writer_conninfo)" 2>"$log"; then
+			break
+		fi
+		pg_note "seeding from $WRITER failed, retrying in ${SEED_INTERVAL}s: $(tail -n 2 "$log" | tr '\n' ' ')"
+		rm -rf "$pgdata"
+		sleep "$SEED_INTERVAL"
+	done
+	rm -f "$log" "$pgdata/standby.signal"
+	sed -i '/^[[:space:]]*primary_conninfo[[:space:]]*=/d; /^[[:space:]]*primary_slot_name[[:space:]]*=/d' \
+		"$pgdata/postgresql.auto.conf" 2>/dev/null || true
+	pg_note "seeded from $WRITER"
+	pg_local_position "$pgdata" || true
+}
+
+# ---------------------------------------------------------------------------------------
+# The stand-in: a throwaway cluster that answers a replication connection, and nothing
+# else, with cluster_name set to the empty marker. It never holds data, is never
+# reachable by the application role (there is none, and every rule but certificate
+# replication rejects), is stopped and deleted before this node seeds, and the
+# readiness probe fails while it exists.
+
+standin_start() {
+	standin_stop
+	prepare_dir "$STANDIN_DIR"
+	if [ "$PG_HAVE_CA" != yes ]; then
+		pg_note "no ca: the stand-in cannot authenticate node 1, so this node does not answer as empty"
+		return 0
+	fi
+	data="$STANDIN_DIR/data"
+	pg_as_postgres "$PG_BIN/initdb" -D "$data" -U "$REPLICATION_ROLE" --no-sync \
+		--auth-local=reject --auth-host=reject --encoding=UTF8 --locale=C.UTF-8 \
+		>"$STANDIN_DIR/initdb.log" 2>&1 || {
+		pg_note "the stand-in could not be created: $(tail -n 2 "$STANDIN_DIR/initdb.log" | tr '\n' ' ')"
+		return 0
+	}
+	{
+		printf '%-10s %-13s %-20s %-9s %s\n' local all all "" reject
+		printf '%-10s %-13s %-20s %-9s %s\n' hostssl replication "$REPLICATION_ROLE" all "cert map=$IDENT_MAP"
+		printf '%-10s %-13s %-20s %-9s %s\n' host all all all reject
+	} >"$data/pg_hba.conf"
+	write_ident "$data"
+	chown "$PG_OS_USER:" "$data/pg_hba.conf" "$data/pg_ident.conf"
+	pg_as_postgres "$PG_BIN/pg_ctl" start -w -t 60 -s -D "$data" -l "$STANDIN_DIR/log" \
+		-o "-c listen_addresses='*' -c port=$PG_PORT -c unix_socket_directories='$STANDIN_DIR' \
+-c cluster_name='$STANDIN_MARK' -c max_connections=4 -c superuser_reserved_connections=0 \
+-c reserved_connections=0 -c shared_buffers=1MB -c max_wal_senders=2 -c fsync=off \
+-c ssl=on -c ssl_cert_file='$TLS_DIR/server.crt' -c ssl_key_file='$TLS_DIR/server.key' \
+-c ssl_ca_file='$TLS_DIR/ca.pem'" || {
+		pg_note "the stand-in did not start: $(tail -n 3 "$STANDIN_DIR/log" | tr '\n' ' ')"
+		return 0
+	}
+	pg_note "no cluster here: answering as empty until node 1 opens"
+}
+
+standin_stop() {
+	if [ -d "$STANDIN_DIR/data" ]; then
+		stop_server "$STANDIN_DIR/data"
+	fi
+	rm -rf "$STANDIN_DIR"
+}
+
+# ---------------------------------------------------------------------------------------
+
 exec_postgres() {
+	# The watcher logs replication lag and states next to the server. It is detached from
+	# this process before the exec, so the postmaster never inherits it as a child.
+	(sh "$SCRIPT_DIR/watch-postgres.sh" "$$" </dev/null >/dev/null &)
+	if [ "$(id -u)" -eq "$(id -u "$PG_OS_USER")" ]; then
+		exec env PATH="$PG_BIN:/usr/bin:/bin" "$PG_BIN/postgres" -D "$1"
+	fi
 	exec setpriv --reuid="$PG_OS_USER" --regid="$PG_OS_USER" --init-groups \
 		env HOME=/var/lib/postgresql PATH="$PG_BIN:/usr/bin:/bin" \
 		"$PG_BIN/postgres" -D "$1"
@@ -465,6 +989,7 @@ exec_postgres() {
 
 stage_tls
 stage_peers
+standin_stop
 if pg_is_writer; then
 	start_primary
 else

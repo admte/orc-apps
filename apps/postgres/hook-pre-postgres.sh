@@ -33,6 +33,13 @@ if ! pg_is_writer; then
 	exit 0
 fi
 
+# While node 1 decides whether another node holds newer data, or copies from one, its
+# durable root is not the database's yet: a capture now could become a restore point
+# older or emptier than what the replicas hold. Refusing skips this capture.
+if [ -e "$RECOVERING" ]; then
+	pg_fail "node 1 is still deciding or copying before it opens; skipping this capture"
+fi
+
 if [ ! -s "$PRIMARY_PGDATA/PG_VERSION" ]; then
 	pg_note "no cluster in the durable root yet"
 	sync
