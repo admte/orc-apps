@@ -278,8 +278,10 @@ postgres start: copying from db-2.shop.internal (timeline 1, 0/C46EBE0; this nod
 postgres start: PARKED: this replica holds WAL past node 1's history (timeline 1, 0/C46EBE0; node 1 left timeline 1 at 0/C1E98A8)
 ```
 
-While node 1 waits or copies, nothing listens for clients: its endpoint is unready and the
-database name answers nothing, so clients see no writer rather than an old one. Captures of
+While node 1 waits or copies, nothing listens for clients on the network: its endpoint is
+unready (it leaves the SRV records), and a client that dials it is refused, so clients see no
+writer rather than an old one. (Under ORC8R the pool's internal name still resolves to node 1
+while the machine is online; it is the closed port, not the name, that keeps clients off.) Captures of
 the durable root are skipped (the capture hook exits non-zero) while node 1 recovers, so a
 half-built cluster never becomes a restore point; a long wait therefore also shows up as
 restore points not arriving.
