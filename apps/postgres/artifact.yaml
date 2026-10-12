@@ -52,6 +52,12 @@ config:
         description: Host name of node 1, which replicas stream from. Required on a replica.
         x-source:
           kind: peers.first
+      peers:
+        type: string
+        title: Nodes
+        description: Host name of every node of the database, one per line, node 1 included. On node 1 it turns on the check that no other node holds newer data before writes are taken.
+        x-source:
+          kind: peers.all
       # The CA that issues the certificates the nodes present to each other. Supplying it
       # is what turns replication on: it is the server's ssl_ca_file, which authenticates
       # a replica's client certificate, and the root a replica verifies the writer against.
@@ -130,8 +136,9 @@ config:
     grace: 120s
   # Only the writer's data lives in the durable root: replicas keep their cluster outside
   # it, so a replica's capture holds nothing and a restored writer comes back with its
-  # data. The hook forces a checkpoint first so recovery after a restore is short. The
-  # postmaster's pid file is never captured: a restored one would only be stale.
+  # data. The hook checkpoints first when enough WAL has piled up since the last one, so
+  # recovery after a restore stays short. The postmaster's pid file is never captured: a
+  # restored one would only be stale.
   persist:
     paths:
       - /var/lib/orc-postgres/primary

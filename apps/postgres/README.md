@@ -297,6 +297,7 @@ never keeps serving a certificate that is no longer supplied.
 | Writer cluster (`PGDATA`) | `/var/lib/orc-postgres/primary/pgdata` |
 | Replica cluster (`PGDATA`) | `/var/lib/orc-postgres/replica/pgdata` |
 | Certificates and keys | `/var/lib/orc-postgres/tls` |
+| Node-local state (never restored elsewhere) | `/var/lib/orc-postgres/state` |
 | Managed settings | `$PGDATA/conf.d/orc.conf`, `$PGDATA/pg_hba.conf`, `$PGDATA/pg_ident.conf` |
 | Socket | `/var/run/postgresql` |
 | Binaries | `/usr/lib/postgresql/<major>/bin` |
@@ -336,9 +337,19 @@ node number:
 kill past the grace costs crash recovery on the next start, never committed data.
 
 **hook_pre** runs before a capture of the durable root, for deployments that snapshot app
-data. On the writer it issues `CHECKPOINT` and `sync`, so a restored cluster has little
-WAL to replay; elsewhere it only syncs. A failed checkpoint skips that capture rather than
+data. A snapshot of the volume is crash-consistent without help, so the hook only bounds
+how much WAL a restored cluster replays: on the writer it issues `CHECKPOINT` when more
+than 64 MB of WAL (`CHECKPOINT_AFTER_MB`) has been written since the last checkpoint, and
+otherwise only syncs. An idle database therefore writes nothing between captures, and a
+busy one is not pushed into extra checkpoints, each of which makes the next write to every
+page a full-page image in the WAL. A failed checkpoint skips that capture rather than
 taking an inconsistent one.
+
+**Sizing** comes from the machine on every start: `shared_buffers` a quarter of memory,
+`effective_cache_size` three quarters, `max_wal_size` a quarter of the data directory's
+file system (96 MB to 8 GB), `checkpoint_timeout` 15 minutes. A node that cannot have
+replicas (no `ca`, or `peers` naming only itself) keeps no extra WAL
+(`wal_keep_size = 0`). `ALTER SYSTEM` overrides any of them.
 
 ## Automatic configuration
 

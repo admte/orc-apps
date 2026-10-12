@@ -10,6 +10,8 @@
 #                                   start. Never worth capturing: it is a copy of the writer.
 #   /var/lib/orc-postgres/tls       the postgres account's copies of the certificates and
 #                                   keys the server uses, re-staged on every start.
+#   /var/lib/orc-postgres/state     node-local facts that must not be restored elsewhere,
+#                                   such as the last peers list.
 
 # Which PostgreSQL to run. APP_VERSION carries the version the deployment selected and
 # is set for every phase; the major alone decides the packages and the binary path, so
@@ -34,6 +36,10 @@ PRIMARY_ROOT="$APP_ROOT/primary"
 PRIMARY_PGDATA="$PRIMARY_ROOT/pgdata"
 REPLICA_PGDATA="$APP_ROOT/replica/pgdata"
 TLS_DIR="$APP_ROOT/tls"
+# Node-local state that must never travel with the data: kept on this machine's own disk,
+# outside the durable root, so a restore onto a new machine does not bring it along.
+STATE_DIR="$APP_ROOT/state"
+PEERS_CACHE="$STATE_DIR/peers"
 
 # Every DB role and map name the recipe owns. The replication role has no password: it
 # is reachable only by presenting a client certificate the configured CA issued.
