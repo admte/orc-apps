@@ -213,11 +213,13 @@ peer_count() {
 stage_peers() {
 	mkdir -p "$STATE_DIR"
 	chmod 0755 "$STATE_DIR"
+	# awk ends every line with a newline, the last one included: the list arrives
+	# without a final one, and `read` drops a last line that has none.
 	if [ -n "${PEERS_FILE:-}" ] && [ -r "$PEERS_FILE" ]; then
-		tr -d '\r' <"$PEERS_FILE" | sed '/^[[:space:]]*$/d' >"$PEERS_CACHE.new"
+		tr -d '\r' <"$PEERS_FILE" | awk 'NF { print $1 }' >"$PEERS_CACHE.new"
 		mv -f "$PEERS_CACHE.new" "$PEERS_CACHE"
 	elif [ -n "${PEERS:-}" ]; then
-		printf '%s\n' "$PEERS" | tr -d '\r' | sed '/^[[:space:]]*$/d' >"$PEERS_CACHE.new"
+		printf '%s\n' "$PEERS" | tr -d '\r' | awk 'NF { print $1 }' >"$PEERS_CACHE.new"
 		mv -f "$PEERS_CACHE.new" "$PEERS_CACHE"
 	fi
 	if [ -s "$PEERS_CACHE" ]; then
@@ -231,7 +233,7 @@ stage_peers() {
 # number its name ends with ({pool}-{N}.…).
 other_peers() {
 	[ -s "$PEERS_CACHE" ] || return 0
-	while IFS= read -r peer; do
+	while IFS= read -r peer || [ -n "$peer" ]; do
 		[ -n "$peer" ] || continue
 		[ "$peer" = "${WRITER:-}" ] && pg_is_writer && continue
 		[ "$(peer_slot "$peer")" = "$PG_SLOT" ] && continue
