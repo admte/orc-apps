@@ -124,12 +124,16 @@ config:
   # Packages only, from the PGDG repository. Nothing here is node identity or data, so
   # the result is safe to snapshot into a reusable machine image: initdb, roles, and a
   # replica's seed all belong to start.
+  # Commands are named rather than left to the start-<app> naming convention, so the
+  # package runs the same whatever repository name it is published under.
   install:
+    command: sh install-postgres.sh
     timeout: 15m
   # Managed service, resolved from start-postgres.sh. The script stages the TLS material,
   # initializes or rebuilds the cluster for this node, and execs the postmaster under the
   # postgres account, so PostgreSQL is the service's main process.
   start:
+    command: sh start-postgres.sh
     service: postgres
     restart: on-failure
   # SIGINT is PostgreSQL's fast shutdown: sessions are disconnected, a checkpoint is
