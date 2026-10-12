@@ -151,11 +151,12 @@ Every node can say where its data ends: the cluster's system identifier, its tim
 the last WAL position it holds. Node 1 asks each other node with `IDENTIFY_SYSTEM` over a
 replication connection, authenticated by the same certificates replication uses; a standby
 answers with the newer of what it received and what it replayed, and `TIMELINE_HISTORY`
-says where each earlier timeline was left. A node asks its own cluster the same way over
-the Unix socket, after letting it replay all the WAL it holds. That replay is required, not
-a convenience: the control file (`pg_controldata`) records the last checkpoint, not the
-end of the WAL, and a restored cluster holds WAL past its checkpoint — a node 1 that
-under-read its own end would copy from a replica that is in fact behind it.
+says where each earlier timeline was left. A node reads its own cluster's end from its
+files, with no server running: the control file for the identifier and the last
+checkpoint, then `pg_waldump` from that checkpoint to the last complete record. The control
+file alone is not enough: it records the last checkpoint, not the end of the WAL, and a
+restored cluster holds WAL past its checkpoint — a node 1 that under-read its own end would
+copy from a replica that is in fact behind it.
 
 Data A **contains** data B when they share the system identifier and B's position lies on
 A's history: the same timeline and not past A's position, or an earlier timeline that A
@@ -235,8 +236,21 @@ position, and asks node 1 for its position and history:
   replaced away.
 
 Every replica holds a physical replication slot on node 1 (`replica_<N>`), so node 1 keeps
-the WAL a restarting replica needs, up to `max_slot_wal_keep_size`; past that bound the slot
-is given up rather than letting `pg_wal` fill the disk, and that replica re-seeds.
+the WAL a restarting replica needs, up to `max_slot_wal_keep_size` (the same size as
+`max_wal_size`); past that bound the slot is given up rather than letting `pg_wal` fill the
+disk, and that replica re-seeds. Node 1 creates the slots of the nodes in `peers` when it
+opens and drops those of nodes no longer listed; a replica whose slot node 1 lacks creates
+its own.
+
+### Never failing a start
+
+A start never exits with an error for a reason that would come back on the next try:
+an orchestrator may replace a machine whose app keeps failing (three failures within an
+hour, under ORC8R), and a replaced replica takes its data with it. So a start that cannot
+go on — a missing certificate, a control file that cannot be read — logs `HOLD:` with the
+reason every ten minutes and keeps the node down until the app is restarted. Waiting is
+the same: node 1 in WAIT and a replica waiting to seed are a start that has not finished,
+which the platform treats as a running app whose endpoint is not ready.
 
 ### Operator escape hatches
 
@@ -272,8 +286,13 @@ restore points not arriving.
 
 Node 1 logs replication lag per replica as `postgres lag:` lines, with the lag in seconds
 and bytes — every minute while any replica is more than 1 s behind or disconnected,
-otherwise every ten minutes. A small watcher started next to the server writes them, in
-the same service and to the same log.
+otherwise every ten minutes. A replica logs `postgres lag: WARNING: NOT streaming from
+node 1` every minute while it is not streaming, and a parked replica repeats its `PARKED`
+reason every ten minutes. A small watcher started next to the server writes these lines,
+in the same service and to the same log.
+
+The `pg` endpoint's readiness probe (`probe-postgres.sh`) is ready only while the server
+takes connections and the node is not waiting, copying, answering as empty, or parked.
 
 ## TLS and trust
 
@@ -295,7 +314,8 @@ never keeps serving a certificate that is no longer supplied.
 |---|---|
 | Durable root (the writer's data) | `/var/lib/orc-postgres/primary` |
 | Writer cluster (`PGDATA`) | `/var/lib/orc-postgres/primary/pgdata` |
-| Replica cluster (`PGDATA`) | `/var/lib/orc-postgres/replica/pgdata` |
+| Replica root | `/var/lib/orc-postgres/replica` |
+| Replica cluster (`PGDATA`) | `/var/lib/orc-postgres/replica/standby/pgdata` |
 | Certificates and keys | `/var/lib/orc-postgres/tls` |
 | Node-local state (never restored elsewhere) | `/var/lib/orc-postgres/state` |
 | Managed settings | `$PGDATA/conf.d/orc.conf`, `$PGDATA/pg_hba.conf`, `$PGDATA/pg_ident.conf` |
@@ -307,7 +327,10 @@ The managed files are rewritten on every start; edits to them do not survive a r
 Anything else in `postgresql.conf` or `postgresql.auto.conf` is left alone.
 
 Only the durable root is worth backing up. A replica's cluster is a copy of the writer,
-so it is deliberately kept outside it; it is still never discarded while it holds
+but it can be as large, so the manifest declares both `primary` and `replica` as persisted
+roots — on ORC8R both live on the node's App-data volume rather than its system disk — and
+keeps `standby/` out of every capture with the `!standby/**` filter: a replica's restore
+point is an empty directory. A replica's cluster is still never discarded while it holds
 something the writer lacks (see [Recovery and durability](#recovery-and-durability)).
 
 ## Lifecycle
@@ -347,9 +370,8 @@ taking an inconsistent one.
 
 **Sizing** comes from the machine on every start: `shared_buffers` a quarter of memory,
 `effective_cache_size` three quarters, `max_wal_size` a quarter of the data directory's
-file system (96 MB to 8 GB), `checkpoint_timeout` 15 minutes. A node that cannot have
-replicas (no `ca`, or `peers` naming only itself) keeps no extra WAL
-(`wal_keep_size = 0`). `ALTER SYSTEM` overrides any of them.
+file system (96 MB to 4 GB), `checkpoint_timeout` 15 minutes. No WAL is kept by size
+(`wal_keep_size = 0`): replicas are covered by their slots. `ALTER SYSTEM` overrides any of them.
 
 ## Automatic configuration
 
@@ -386,4 +408,7 @@ sudo env SLOT=1 POOL=db PASSWORD_FILE=/root/pg.password sh start-postgres.sh
 `<PARAM>_FILE` variables (`PASSWORD_FILE`, `CA_FILE`, `SERVER_CERT_FILE`,
 `SERVER_KEY_FILE`, `CLIENT_CERT_FILE`, `CLIENT_KEY_FILE`) are how file-backed parameters
 arrive; plain ones arrive upper-cased (`SLOT`, `POOL`, `WRITER`, `APP_USER`, `APP_DB`,
-`MAX_CONNECTIONS`).
+`MAX_CONNECTIONS`). `peers` arrives as `PEERS_FILE`, or may be given as `PEERS`, one name
+per line. Several nodes can share one machine for testing: give each its own `APP_ROOT`,
+`PG_PORT` and `PG_SOCKET_DIR`, write `WRITER` and the peers as `host:port`, and run as the
+account named by `PG_OS_USER`.

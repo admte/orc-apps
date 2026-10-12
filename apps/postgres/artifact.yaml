@@ -116,6 +116,11 @@ config:
     pg:
       port: 5432
       serve: primary
+      # Ready only while the server takes connections and this node is one clients
+      # should reach: not while node 1 decides or copies, not while an empty node runs
+      # its stand-in, not while a replica is parked (see README, Recovery and durability).
+      probe:
+        command: sh probe-postgres.sh
   # Packages only, from the PGDG repository. Nothing here is node identity or data, so
   # the result is safe to snapshot into a reusable machine image: initdb, roles, and a
   # replica's seed all belong to start.
@@ -134,25 +139,33 @@ config:
     signal: SIGINT
     timeout: 30s
     grace: 120s
-  # Only the writer's data lives in the durable root: replicas keep their cluster outside
-  # it, so a replica's capture holds nothing and a restored writer comes back with its
-  # data. The hook checkpoints first when enough WAL has piled up since the last one, so
-  # recovery after a restore stays short. The postmaster's pid file is never captured: a
+  # Two roots on the App-data volume. primary/ holds the writer's cluster and is the only
+  # data captured. replica/ holds a replica's cluster, which can be as large as the
+  # writer's and so belongs on the volume too, but under standby/, which the filter
+  # keeps out of every capture: a replica's copy is the writer's data, and its restore
+  # point is an empty directory. The hook checkpoints first when enough WAL has piled up
+  # since the last checkpoint, so recovery after a restore stays short, and refuses while
+  # node 1 is still deciding or copying. The postmaster's pid file is never captured: a
   # restored one would only be stale.
   persist:
     paths:
       - /var/lib/orc-postgres/primary
+      - /var/lib/orc-postgres/replica
+      - "!standby/**"
       - "!**/postmaster.pid"
     hook_pre:
       command: sh hook-pre-postgres.sh
       timeout: 5m
-  # Packages plus a replica's copy of the data, which lives outside the durable root.
+  # Packages and the node-local state; every cluster lives on the App-data volume.
   footprint_gb: 2
 files:
   - postgres-common.sh
   - install-postgres.sh
   - start-postgres.sh
   - hook-pre-postgres.sh
+  - postgres-position.sh
+  - watch-postgres.sh
+  - probe-postgres.sh
 platforms:
   - os: linux
     arch: amd64
