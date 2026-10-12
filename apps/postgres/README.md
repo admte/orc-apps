@@ -4,7 +4,7 @@ PostgreSQL as a managed service. One node holds the data and takes writes; add m
 nodes and each one streams from it as a hot standby.
 
 Nodes are told apart by a number: **node 1 is the writer**, and every other node is a
-replica that rebuilds itself from the writer on each start. A single node is node 1, so
+replica that streams from it and keeps its copy across restarts. A single node is node 1, so
 one node needs no configuration beyond a password.
 
 ## Quick start
@@ -73,6 +73,10 @@ Optional, and only needed for more than one node or for verifiable TLS:
 - `slot` - this node's number, 1-based and stable for its life. Default `1`.
 - `pool` - a name shared by the nodes of one database; used as `cluster_name` in logs.
 - `writer` - the host name of node 1. Required on a replica.
+- `peers` - one host name per node of the database, one per line, node 1 included. On
+  node 1 this is what turns on the freshness check of
+  [Recovery and durability](#recovery-and-durability); without it node 1 trusts its own
+  data.
 - `ca` - PEM chain of the CA that issued the certificates below. Supplying it is what
   turns replication on.
 - `server_cert`, `server_key` - the certificate the listener presents.
@@ -113,17 +117,163 @@ sudo orc install postgres \
 sudo orc start postgres
 ```
 
-Node 2 discards whatever it had, runs `pg_basebackup` against the writer with
-`sslmode=verify-full`, and follows it as a hot standby. A replica started before its
-writer retries for up to 30 minutes, so the order you start them in does not matter.
+Node 2 seeds itself with `pg_basebackup` against the writer (`sslmode=verify-full`) and
+follows it as a hot standby; on later starts it keeps its copy and resumes streaming. The
+order you start the nodes in does not matter. What a node does when its copy and the
+writer's disagree is in [Recovery and durability](#recovery-and-durability).
 
 **Any client certificate the CA issued may replicate.** The writer maps every
 certificate that CA signed onto the replication role; which certificates exist is the
 CA's business. Use a CA scoped to this database, not a company-wide one.
 
 Writes go to node 1. Replicas are read-only, and there is no automatic failover: if node
-1 is lost, its replacement restores node 1's data and takes over. Replicas are not
-promoted.
+1 is lost, its replacement takes over as node 1, first making sure it holds the newest data
+any node has. Replicas are never promoted. See
+[Recovery and durability](#recovery-and-durability).
+
+## Recovery and durability
+
+Replication is asynchronous: node 1 acknowledges a commit once it is on its own disk, and
+the replicas receive it a moment later. So **losing node 1 loses at most the replication
+lag** — provided the newest copy is never thrown away. Three rules make sure of that.
+
+1. **Node 1 is always the writer.** No replica is ever promoted and nothing moves the
+   writer. The app never asks a control plane for permission to keep serving: a running
+   writer keeps running whatever else is unreachable.
+2. **A node 1 that cannot be sure it is the newest proves it before taking writes.** If a
+   replica is ahead, node 1 copies from the freshest one. If it cannot ask a node that may
+   hold newer data, it **waits**.
+3. **A replica never deletes data node 1 does not have.**
+
+### Positions
+
+Every node can say where its data ends: the cluster's system identifier, its timeline, and
+the last WAL position it holds. Node 1 asks each other node with `IDENTIFY_SYSTEM` over a
+replication connection, authenticated by the same certificates replication uses; a standby
+answers with the newer of what it received and what it replayed, and `TIMELINE_HISTORY`
+says where each earlier timeline was left. A node asks its own cluster the same way over
+the Unix socket, after letting it replay all the WAL it holds. That replay is required, not
+a convenience: the control file (`pg_controldata`) records the last checkpoint, not the
+end of the WAL, and a restored cluster holds WAL past its checkpoint — a node 1 that
+under-read its own end would copy from a replica that is in fact behind it.
+
+Data A **contains** data B when they share the system identifier and B's position lies on
+A's history: the same timeline and not past A's position, or an earlier timeline that A
+left at or after B's position. Otherwise B is **diverged** from A.
+
+A node with no cluster answers too, as **empty**. Slot names answer while the machine is
+online, whether or not PostgreSQL is listening, so without a positive answer an online
+node with nothing listening could be a replica that holds data and is still starting —
+and a new pool, or a pool that lost every node, would wait forever. So a node waiting to
+be seeded runs a small stand-in server (its own throwaway cluster outside the data
+directories) that accepts the replication role only, rejects everything else, and answers
+`SHOW cluster_name` with the fixed marker `orc-postgres-empty`.
+
+### Node 1 at start
+
+`peers` (one name per allocated node, filled in by the orchestrator) is read at start and
+is what turns the check on; with it, node 1 also needs `client_cert`, `client_key` and
+`ca`. Without `peers`, node 1 trusts its own data, as a single node does.
+
+- **It was the writer on this machine before** — a marker outside the durable root, keyed
+  by the cluster's system identifier, says this machine opened this cluster (a service
+  restart, a reboot with the disk intact). Its data is the newest by construction:
+  replicas only ever receive WAL it has already written to its own disk. It starts at once
+  and asks nobody.
+- **Otherwise** (a replacement with a restored cluster, a replacement with nothing
+  restored, a first start) it asks every other node in `peers`. Each answers one of:
+  - data **contained in** node 1's — behind or equal, fine;
+  - data **containing** node 1's and ahead of it — newer; the freshest such node is the
+    source;
+  - **empty** — holds nothing;
+  - **diverged** data, or another cluster — logged and not used. Only a forced start
+    (below) creates these, and that replica parks itself;
+  - no answer: the name answers nothing (the machine is down), or nothing accepts the
+    connection, or the server refuses it — **unknown**.
+
+  Then:
+  - **any node unknown → WAIT.** Node 1 does not open. It asks again after a pause that
+    doubles from 5 s to 60 s, logging every round which nodes it waits for and why. An
+    online replica whose server stays down keeps node 1 waiting indefinitely: read that
+    replica's log, and force (below) if its data is not needed.
+  - **a newer node → copy.** Node 1 copies the source with `pg_basebackup`, then strips the
+    source's standby settings from the copy. The durable root holds one cluster, so node
+    1's own cluster is discarded first; it is provably contained in the source's, so
+    nothing is lost. If the source is lost mid-copy, node 1 now holds nothing and decides
+    again from the beginning, against the nodes that remain.
+  - **no data anywhere** (no local cluster, and every other node answered empty) →
+    `initdb`, as for a new database.
+  - With existing data, node 1 replays what it holds and **starts a new timeline** before
+    opening. The new timeline begins at or after every replica's position, so every
+    replica can follow it, and a replica holding anything past that point (only possible
+    after a forced start) cannot follow it by accident: PostgreSQL refuses to follow a
+    timeline that forked before its own position.
+
+  A new pool of several nodes therefore opens once its replicas have booted and answered
+  empty; a single-node pool asks nobody.
+
+### Replicas at start
+
+A replica keeps its cluster across restarts. It replays what it holds, reads its own
+position, and asks node 1 for its position and history:
+
+- **no local cluster, or one whose control file cannot be read** → seed from node 1 with
+  `pg_basebackup`, answering *empty* until node 1 is open.
+- **node 1 contains the replica's data** → keep it and stream. Before opening, streaming
+  has to start and reach node 1's position as observed at that moment; if node 1 no longer
+  holds the WAL needed to catch up, the replica's data is provably a subset of node 1's,
+  and it re-seeds.
+- **node 1 does not answer** → keep the data and run as a standby pointed at node 1. It
+  streams once node 1 is back, and the timeline rule above stops it from following a node
+  1 that forked behind it.
+- **the replica holds data node 1 does not** — ahead on the same timeline, on a newer
+  timeline, past the point node 1 left its timeline, or another cluster → **PARKED.** The
+  data is kept, and the replica runs as a disconnected, read-only standby: an operator can
+  read it, a later node 1 can still ask it for its position, and its readiness probe
+  fails, so the node's endpoint shows **unready** and stops answering reads. Endpoint
+  readiness feeds name resolution only, never node replacement, so a parked node is not
+  replaced away.
+
+Every replica holds a physical replication slot on node 1 (`replica_<N>`), so node 1 keeps
+the WAL a restarting replica needs, up to `max_slot_wal_keep_size`; past that bound the slot
+is given up rather than letting `pg_wal` fill the disk, and that replica re-seeds.
+
+### Operator escape hatches
+
+Both are one-shot files on the node itself: no control plane is involved, and a replacement
+machine never inherits them.
+
+- `touch /var/lib/orc-postgres/force-start` on a waiting node 1: it stops waiting for the
+  unknown nodes and goes on with the freshest data among the nodes that answered, its own
+  included. **Committed writes held only by the nodes it did not hear from are given up.**
+  If no node that answered holds data, this **creates a new, empty database** — and the
+  log says so before it does. The file is consumed by the decision it unblocks; if that
+  decision ends back in WAIT (a copy failed), force again.
+- `touch /var/lib/orc-postgres/release-parked` on a parked replica: its cluster is moved
+  aside to `/var/lib/orc-postgres/replica/parked-<time>` (kept, not deleted; remove it once
+  you have what you need from it) and the replica re-seeds from node 1.
+
+### What an operator sees
+
+Each decision is a log line in the app's log prefixed `postgres start:`, naming every node
+and its position, for example:
+
+```
+postgres start: WAIT round 4: 1 of 2 nodes unknown: db-3.shop.internal offline; to stop waiting: touch /var/lib/orc-postgres/force-start
+postgres start: copying from db-2.shop.internal (timeline 1, 0/C46EBE0; this node 0/C1E98A8)
+postgres start: PARKED: this replica holds WAL past node 1's history (timeline 1, 0/C46EBE0; node 1 left timeline 1 at 0/C1E98A8)
+```
+
+While node 1 waits or copies, nothing listens for clients: its endpoint is unready and the
+database name answers nothing, so clients see no writer rather than an old one. Captures of
+the durable root are skipped (the capture hook exits non-zero) while node 1 recovers, so a
+half-built cluster never becomes a restore point; a long wait therefore also shows up as
+restore points not arriving.
+
+Node 1 logs replication lag per replica as `postgres lag:` lines, with the lag in seconds
+and bytes — every minute while any replica is more than 1 s behind or disconnected,
+otherwise every ten minutes. A small watcher started next to the server writes them, in
+the same service and to the same log.
 
 ## TLS and trust
 
@@ -145,7 +295,7 @@ never keeps serving a certificate that is no longer supplied.
 |---|---|
 | Durable root (the writer's data) | `/var/lib/orc-postgres/primary` |
 | Writer cluster (`PGDATA`) | `/var/lib/orc-postgres/primary/pgdata` |
-| Replica cluster (`PGDATA`, disposable) | `/var/lib/orc-postgres/replica/pgdata` |
+| Replica cluster (`PGDATA`) | `/var/lib/orc-postgres/replica/pgdata` |
 | Certificates and keys | `/var/lib/orc-postgres/tls` |
 | Managed settings | `$PGDATA/conf.d/orc.conf`, `$PGDATA/pg_hba.conf`, `$PGDATA/pg_ident.conf` |
 | Socket | `/var/run/postgresql` |
@@ -155,8 +305,9 @@ never keeps serving a certificate that is no longer supplied.
 The managed files are rewritten on every start; edits to them do not survive a restart.
 Anything else in `postgresql.conf` or `postgresql.auto.conf` is left alone.
 
-Only the durable root is worth backing up. A replica's cluster is a copy of the writer
-and is thrown away and rebuilt on each start, so it is deliberately kept outside it.
+Only the durable root is worth backing up. A replica's cluster is a copy of the writer,
+so it is deliberately kept outside it; it is still never discarded while it holds
+something the writer lacks (see [Recovery and durability](#recovery-and-durability)).
 
 ## Lifecycle
 
@@ -177,8 +328,9 @@ node number:
   A start with no password supplied and a cluster already present leaves the roles alone
   rather than failing, so a bare service restart after the parameter file is withdrawn
   does not turn into a crash loop.
-- *Any other node* discards its previous cluster, seeds from the writer with
-  `pg_basebackup -R`, and `exec`s the server as a hot standby.
+- *Any other node* keeps its cluster when the writer's contains it, seeds from the
+  writer with `pg_basebackup` when it has none, and `exec`s the server as a hot standby;
+  [Recovery and durability](#recovery-and-durability) has every case.
 
 **stop** is `SIGINT` — PostgreSQL's fast shutdown — with a 120s grace before the kill. A
 kill past the grace costs crash recovery on the next start, never committed data.
