@@ -1,0 +1,33 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: checkov
+  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  org.opencontainers.image.description: Checkov static analysis for infrastructure as code
+  org.opencontainers.image.source: https://www.checkov.io
+config:
+  versions:
+    # Shaped after `java`, `node`, `go` and `snyk`: a JSON endpoint, the field holding
+    # the version string, and a pattern whose named `version` group extracts it. A
+    # pattern without that group leaves the list empty.
+    #
+    # Checkov tags carry no leading "v", unlike most projects here.
+    source: json
+    url: "https://api.github.com/repos/bridgecrewio/checkov/releases?per_page=100"
+    field: tag_name
+    filter:
+      pattern: '^(?P<version>\d+\.\d+\.\d+)$'
+      latest_per: minor
+      limit: 30
+  install: {}
+  uninstall: {}
+files:
+  - install-checkov.sh
+  - uninstall-checkov.sh
+  - install-checkov.ps1
+  - uninstall-checkov.ps1
+platforms:
+  # The project builds x86_64 only - there is no arm64 asset for any platform.
+  - os: linux
+    arch: amd64
+  - os: windows
+    arch: amd64
