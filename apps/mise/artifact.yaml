@@ -1,0 +1,46 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: mise
+  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  org.opencontainers.image.description: mise dev tool and runtime version manager
+  org.opencontainers.image.source: https://mise.jdx.dev
+config:
+  versions:
+    # Shaped after `snyk`, and deliberately not after `terraform` or `trivy`.
+    #
+    # Spec 142 describes `source: github_releases` with a `filter.pattern`, but the
+    # deployed server returns an empty list for that combination — tried here and on
+    # `cosign`, both times only `default` appeared. `github_releases` *without* a
+    # pattern does work (`trivy`), and so does the `json` source below. A pattern is
+    # needed here to strip the tag's leading "v", so `json` it is.
+    #
+    # The named `version` group is what extracts the version from the tag: a pattern
+    # without it only filters.
+    #
+    # No `latest_per`: mise releases on a calendar version, so "minor" is the month and
+    # grouping by it means one release per month. The list is the newest thirty instead.
+    source: json
+    url: "https://api.github.com/repos/jdx/mise/releases?per_page=100"
+    field: tag_name
+    filter:
+      pattern: '^v(?P<version>\d+\.\d+\.\d+)$'
+      limit: 30
+  install: {}
+  uninstall: {}
+files:
+  - install-mise.sh
+  - uninstall-mise.sh
+platforms:
+  # Linux only. The project publishes Windows binaries, but they are Rust built against
+  # the MSVC toolchain and need vcruntime140.dll, which ships with the Visual C++
+  # Redistributable rather than with Windows. A Server Core node has neither it nor
+  # msvcp140.dll, and mise.exe exits 0xC0000135 (STATUS_DLL_NOT_FOUND) before reaching
+  # main — no output, nothing to diagnose from. Verified on a node.
+  #
+  # Installing the redistributable from here was considered and rejected: it is a system
+  # component, it outlives this app's uninstall, and no other package in this catalog
+  # changes the node that way.
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
