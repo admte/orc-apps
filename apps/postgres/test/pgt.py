@@ -205,7 +205,8 @@ def mstop(tag):
 
 
 def ev(tag):
-    code, out = csh(f'cat {D}/ev.{tag}')
+    # exec output is capped at 8 KiB: never cat the whole file (UNCERTAIN/PROGRESS lines pile up)
+    code, out = csh(f"grep -E '^(START|DOWN|UP|CONN|AUTHFAIL) ' {D}/ev.{tag} | tail -n 60")
     return out.splitlines()
 
 
@@ -497,7 +498,6 @@ def s19(version):
     for a in apps:
         if a['name'].startswith('postgres'):
             a['version'] = version
-            a['params'].pop('password', None)
     r = put_pool({'apps': apps})
     say('pool version', v0, '->', r.get('version'))
     wait_down(tag, 900)
@@ -574,7 +574,107 @@ def s5():
                                                               'decision': decided[-4:]})
 
 
-SCENARIOS = {'s1', 's2agent', 's2reboot', 's3', 's4', 's5', 's6', 's7', 's15', 's17', 's18', 's19'}
+PROBE = r'''
+import socket,ssl,struct,sys
+host=sys.argv[1]; port=int(sys.argv[2]) if len(sys.argv)>2 else 5432
+try:
+    ip=socket.getaddrinfo(host,port,proto=socket.IPPROTO_TCP)[0][4][0]
+except Exception as e:
+    print('DNS_FAIL',e); sys.exit(3)
+try:
+    s=socket.create_connection((ip,port),timeout=5)
+    s.sendall(struct.pack('!ii',8,80877103))
+    r=s.recv(1)
+    print('REACHED',ip,'sslrequest_reply',r)
+except Exception as e:
+    print('TCP_FAIL',ip,e); sys.exit(4)
+'''
+
+
+def probe_from(node_id, host, port=5432):
+    """Postgres-level reachability from any node (python3 only): DNS, TCP, SSLRequest -> b'S'."""
+    return nexec(node_id, ['python3', '-c', PROBE, host, str(port)])
+
+
+def set_expose(expose, name=None):
+    p = pool()
+    apps = p['apps']
+    for a in apps:
+        if a['name'].startswith('postgres'):
+            ep = {'expose': expose}
+            if name:
+                ep['name'] = name
+            a['endpoints'] = {'pg': ep}
+    r = put_pool({'apps': apps})
+    say('expose', expose, name, 'pool version', r.get('version'))
+    return r
+
+
+def endpoints():
+    return api('GET', f"/api/pools/{pool()['id']}/endpoints")['items']
+
+
+FILL = '/var/lib/orc-postgres/primary/pgt-fill.bin'
+
+
+def s9_fill():
+    """Fill node 1's App-data file system (fallocate, nothing written to the host) under writes."""
+    tag = f's9-{int(time.time())}'
+    wstart(tag)
+    time.sleep(10)
+    code, out = ssh(1, f"avail=$(df -B1 --output=avail /var/lib/orc-postgres/primary | tail -1); "
+                       f"fallocate -l $((avail - 8*1024*1024)) {FILL}; df -h /var/lib/orc-postgres/primary | tail -1")
+    say('filled', code, out.strip())
+    try:
+        wait_down(tag, 300)
+    except TimeoutError:
+        say('writer never failed while full')
+    time.sleep(20)
+    print('\n'.join(ev(tag)[-6:]))
+    return tag
+
+
+def lag_load(rows=3_000_000, pad=2000):
+    """One big INSERT on the writer (WAL burst) from the client, as a unit."""
+    sql = (f"INSERT INTO ledger(id,writer,pad) SELECT 9000000000000000000-g,'lag',repeat(md5(g::text),{pad // 32}) "
+           f"FROM generate_series(1,{rows}) g")
+    code, out = csh(f'systemd-run --unit {unit("lag")} --setenv=PGPASSWORD="$(cat {D}/pw)" '
+                    f'--property=StandardOutput=file:{D}/lag.log --property=StandardError=file:{D}/lag.log '
+                    f'psql -X "host={HOST} user=app dbname=app sslmode=require" -c "{sql}"')
+    assert code == 0, out
+
+
+def lag(rows='3000000', secs='240'):
+    """WAL burst on the writer; sample replica lag on node 1 and look for the lag warning."""
+    tag = f'lag-{int(time.time())}'
+    t0 = time.time()
+    wstart(tag)
+    lag_load(int(rows))
+    samples = []
+    end = time.time() + int(secs)
+    q = ("select coalesce(max(extract(epoch from flush_lag)),0)::numeric(10,2), "
+         "coalesce(max(pg_wal_lsn_diff(pg_current_wal_lsn(),flush_lsn)),0)::bigint from pg_stat_replication")
+    while time.time() < end:
+        code, out = ssh(1, f'sudo -u postgres psql -X -tA -F " " -h /var/run/postgresql -c "{q}"')
+        if code == 0 and out.strip():
+            f, b = out.split()[:2]
+            samples.append((round(time.time() - t0), float(f), int(b)))
+        time.sleep(5)
+    csh(f'systemctl stop {unit("lag")}; systemctl reset-failed {unit("lag")} 2>/dev/null; true')
+    wstop(tag)
+    n1 = slot_node(1)
+    lines = node_logs(n1['id'], f'{int(time.time() - t0) + 60}s', ['postgres lag:'])
+    warns = [n.get('warnings') for n in nodes()]
+    sustained = max((s[1] for s in samples), default=0)
+    v = verify(tag)
+    return record({'scenario': 'replication lag under load', 'max_flush_lag_s': sustained,
+                   'max_bytes_behind': max((s[2] for s in samples), default=0), 'samples': samples[::3],
+                   'lag_log_lines': lines[-8:], 'node_warnings': warns, 'rpo_rows': v['lost_acked'],
+                   'load': csh(f'cat {D}/lag.log')[1].strip()[-200:],
+                   'pass': (sustained < 1) or any('WARNING' in x for x in lines)})
+
+
+SCENARIOS = {'lag', 's9_fill','s1', 's2agent', 's2reboot', 's3', 's4', 's5', 's6', 's7', 's15', 's17', 's18', 's19'}
 
 
 def main():
