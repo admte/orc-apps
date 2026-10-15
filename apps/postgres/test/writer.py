@@ -80,11 +80,13 @@ while True:
             cur = conn.cursor()
             cur.execute("CREATE TABLE IF NOT EXISTS ledger(id bigint PRIMARY KEY, writer text NOT NULL,"
                         " pad text, at timestamptz NOT NULL DEFAULT now())")
-            if down_since:
-                ev.write(f'UP {now():.3f} downtime={now() - down_since:.2f}\n')
-                down_since = None
         cur.execute("INSERT INTO ledger(id,writer,pad) VALUES(%s,%s,repeat('x',200))", (nid, tag))
         ack.write(f'{nid} {now():.3f}\n')
+        # UP only on an acknowledged write: a connection that opens but cannot write
+        # (disk full, read-only) is still down.
+        if down_since:
+            ev.write(f'UP {now():.3f} downtime={now() - down_since:.2f}\n')
+            down_since = None
         nid += 1
         n += 1
         if n % 5000 == 0:

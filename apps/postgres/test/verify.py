@@ -63,7 +63,11 @@ res = {
     'uncertain_present': len(unc & have),
     'first_ack': min(acked.values()) if acked else None,
     'last_ack': max(acked.values()) if acked else None,
-    'outages': outages,
+    # exec output is capped (8 KiB on ORC8R): keep the extremes, summarise the rest
+    'outages': outages if len(outages) <= 6 else outages[:3] + outages[-3:],
+    'n_outages': len(outages),
+    'rto_max_s': max((o['rto_s'] for o in outages), default=0),
+    'down_total_s': round(sum(o['rto_s'] for o in outages), 2),
     'still_down_since': down[0] if down else None,
 }
 if lost:

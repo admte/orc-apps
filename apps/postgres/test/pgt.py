@@ -272,7 +272,7 @@ def record(res):
 
 
 def rto_max(v):
-    return max((o['rto_s'] for o in v['outages']), default=0)
+    return v.get('rto_max_s', max((o['rto_s'] for o in v['outages']), default=0))
 
 
 def judge(name, v, rto_limit, rpo_limit=0, extra=None, notes=''):
@@ -369,13 +369,16 @@ def sysrq_off(node_id):
                           "'echo 1 > /proc/sys/kernel/sysrq; echo o > /proc/sysrq-trigger'")
 
 
-def s4(n='1'):
-    """Hard loss of the only node (guest power-off via sysrq). Phase A: RPO ~ capture age (~5 min typical)."""
+def s4(n='1', pre='30'):
+    """Hard loss of the only node (guest power-off via sysrq) after PRE seconds of writes.
+
+    Phase A: RPO ~ age of the newest restore point (~5 min typical). `loss_window_s` is that age
+    at the loss; `rpo_s` is the span of the writer's own acknowledged writes that were lost."""
     tag = f's4{n}-{int(time.time())}'
     sum0 = checksum()
     n0 = slot_node(1)
     wstart(tag)
-    time.sleep(30)
+    time.sleep(int(pre))
     rp = latest_rp()
     code, out = sysrq_off(n0['id'])
     t_kill = time.time() + 3
@@ -390,10 +393,10 @@ def s4(n='1'):
     sum1 = checksum()
     rp_age = round(t_kill - rp['committed_at'], 1) if rp else None
     warn = n1.get('warnings') if n1 else None
-    restore = node_logs(n1['id'], '40m', ['restored', 'Restor', 'restore point']) if n1 else []
+    restore = node_logs(n1['id'], '40m', ['App data restored', 'app data: restored']) if n1 else []
     res = {'scenario': 'S4 hard loss, single node', 'rpo_rows': v['lost_acked'], 'rpo_s': v.get('rpo_s', 0),
            'rto_s': rto_max(v), 'acked': v['acked'], 'outages': v['outages'],
-           'restore_point_age_at_loss_s': rp_age, 'node_before': n0['name'],
+           'restore_point_age_at_loss_s': rp_age, 'pre_kill_writes_s': int(pre), 'node_before': n0['name'],
            'node_after': n1 and n1['name'], 'dataset_intact': sum0 == sum1, 'new_node_warnings': warn,
            'restore_lines': restore[-6:]}
     res['pass'] = res['rpo_s'] <= 360 and res['rto_s'] <= 900 + 120 and sum0 == sum1
@@ -520,22 +523,24 @@ def all_streaming(n):
     return code == 0 and out.strip().isdigit() and int(out.strip()) >= n - 1
 
 
-def s7():
-    """Scale 1 -> 3 -> 1 under writes: RPO 0, writer never down."""
+def s7(seq='3,1'):
+    """Resize through SEQ (e.g. 3,1 or 1,3) under writes: RPO 0, writer never down."""
     tag = f's7-{int(time.time())}'
     wstart(tag)
     time.sleep(10)
-    t0 = time.time()
-    resize(3)
-    wait(lambda: all_streaming(3), 2400, 15, '2 replicas streaming')
-    t1 = time.time()
-    say('3 nodes streaming after', round(t1 - t0), 's')
-    time.sleep(30)
-    resize(1)
-    wait(lambda: len([n for n in nodes() if not n.get('baking')]) == 1, 900, 10, 'back to 1 node')
-    time.sleep(15)
+    steps = []
+    for target in [int(x) for x in seq.split(',')]:
+        t0 = time.time()
+        resize(target)
+        if target > 1:
+            wait(lambda: all_streaming(target), 2400, 15, f'{target - 1} replicas streaming')
+        wait(lambda: len([n for n in nodes() if not n.get('baking')]) == target
+             and all(n['state'] == 'online' for n in nodes()), 1800, 10, f'{target} nodes')
+        steps.append({'to': target, 'took_s': round(time.time() - t0)})
+        say('reached', target, 'in', steps[-1]['took_s'], 's')
+        time.sleep(20)
     wstop(tag)
-    return judge('S7 scale 1->3->1', verify(tag), 0, extra={'scale_up_to_streaming_s': round(t1 - t0)})
+    return judge(f'S7 scale {seq} under writes', verify(tag), 0, extra={'steps': steps})
 
 
 def s6():
