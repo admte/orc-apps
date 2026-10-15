@@ -399,7 +399,10 @@ def s4(n='1', pre='30'):
            'restore_point_age_at_loss_s': rp_age, 'pre_kill_writes_s': int(pre), 'node_before': n0['name'],
            'node_after': n1 and n1['name'], 'dataset_intact': sum0 == sum1, 'new_node_warnings': warn,
            'restore_lines': restore[-6:]}
-    res['pass'] = res['rpo_s'] <= 360 and res['rto_s'] <= 900 + 120 and sum0 == sum1
+    # The real loss window runs from the restored point to the last acknowledged write that
+    # did not survive; the writer's own span undercounts it when the writer started after the point.
+    res['loss_window_s'] = round(v['last_lost_at'] - rp['created_at'], 1) if v['lost_acked'] and rp else 0
+    res['pass'] = res['loss_window_s'] <= 300 and res['rto_s'] <= 900 + 120 and sum0 == sum1
     return record(res)
 
 
@@ -639,6 +642,38 @@ def s9_fill():
     return tag
 
 
+def s9(grow_to='12'):
+    """Fill the App-data fs under writes, then grow it; ENOSPC must surface cleanly and writes resume."""
+    n0 = slot_node(1)
+    tag = s9_fill()
+    code, out = ssh(1, "df -h /var/lib/orc-postgres/primary | tail -1; systemctl is-active postgres; systemctl show postgres -p NRestarts")
+    say('while full:', out.strip())
+    time.sleep(60)
+    code, out = ssh(1, "df -h /var/lib/orc-postgres/primary | tail -1; systemctl is-active postgres; systemctl show postgres -p NRestarts")
+    say('after 60s full:', out.strip())
+    full_logs = node_logs(n0['id'], '3m', ['No space', 'ENOSPC', 'PANIC', 'could not', 'app failed', 'termination'])
+    t0 = time.time()
+    r = put_pool({'app_data_gib': int(grow_to)})
+    say('app_data_gib ->', grow_to, 'version', r.get('version'))
+    try:
+        wait_outage_over(tag, 2400)
+        up = True
+    except TimeoutError as e:
+        up = False
+        say(e)
+    t1 = time.time()
+    time.sleep(10)
+    wstop(tag)
+    n1 = slot_node(1)
+    code, out = ssh(1, "df -h /var/lib/orc-postgres/primary | tail -1; ls -la /var/lib/orc-postgres/primary/ | head") if n1 else (None, '')
+    v = verify(tag)
+    enospc = any('No space left' in e for e in [o['error'] for o in v['outages']])
+    record({'scenario': 'S9 app-data disk full', 'pass': up and enospc and v['lost_acked'] == 0, 'writer_errors': [o['error'] for o in v['outages']],
+                'outages': v['outages'], 'rpo_rows': v['lost_acked'], 'recovered': up,
+                'resize_to_writes_s': round(t1 - t0), 'node_before': n0['name'], 'node_after': n1 and n1['name'],
+                'after': out.strip(), 'full_logs': full_logs[-15:], 'checksum': checksum()})
+
+
 def lag_load(rows=3_000_000, pad=2000):
     """One big INSERT on the writer (WAL burst) from the client, as a unit."""
     sql = (f"INSERT INTO ledger(id,writer,pad) SELECT 9000000000000000000-g,'lag',repeat(md5(g::text),{pad // 32}) "
@@ -679,7 +714,7 @@ def lag(rows='3000000', secs='240'):
                    'pass': (sustained < 1) or any('WARNING' in x for x in lines)})
 
 
-SCENARIOS = {'lag', 's9_fill','s1', 's2agent', 's2reboot', 's3', 's4', 's5', 's6', 's7', 's15', 's17', 's18', 's19'}
+SCENARIOS = {'lag', 's9', 's1', 's2agent', 's2reboot', 's3', 's4', 's5', 's6', 's7', 's15', 's17', 's18', 's19'}
 
 
 def main():
