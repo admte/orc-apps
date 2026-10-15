@@ -138,6 +138,7 @@ low-level, one-platform extract.
 | github-runner | draft | GitHub Actions self-hosted runner as a managed service; drains the in-flight job on stop; linux + windows |
 | jenkins-agent | draft | Jenkins Swarm agent as a managed service; drains the in-flight build on stop; linux + windows |
 | terraform | draft | Terraform CLI from HashiCorp Releases; version-scoped install; linux only |
+| forgejo | draft | Forgejo Git service as a managed service; persisted repositories and database; linux only |
 
 ## Related repos
 

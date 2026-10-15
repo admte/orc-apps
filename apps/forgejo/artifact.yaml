@@ -1,0 +1,62 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: forgejo
+  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  org.opencontainers.image.description: Forgejo self-hosted Git service
+  org.opencontainers.image.source: https://forgejo.org
+config:
+  versions:
+    # Forgejo is hosted on Codeberg, not GitHub, so neither github_* source applies.
+    # Codeberg runs Forgejo itself and serves a Gitea-compatible API, which the `json`
+    # source reads — the same source `snyk` uses, and the one proven to work here.
+    #
+    # The named `version` group extracts the version from the tag: a pattern without it
+    # only filters, and the tag's leading "v" would stay in the version string.
+    source: json
+    url: "https://codeberg.org/api/v1/repos/forgejo/forgejo/releases?limit=50"
+    field: tag_name
+    filter:
+      pattern: '^v(?P<version>\d+\.\d+\.\d+)$'
+      latest_per: minor
+      limit: 30
+  # The data Forgejo keeps: repositories, the SQLite database, and the app.ini written
+  # by its first-run setup. Everything lives under one root so there is one path to
+  # declare and one thing to back up.
+  persist:
+    paths:
+      - /var/lib/forgejo
+      - "!**/*.tmp"
+  # The binary is about 100 MB; the rest is a working allowance for repositories that
+  # are not yet in the persisted tree. A planning figure, not a limit.
+  footprint_gb: 5
+  endpoints:
+    web:
+      port: 3000
+      protocol: http
+      # /api/healthz answers before any repository work, so it reports the process
+      # rather than the content.
+      probe:
+        http: /api/healthz
+      # One instance owns the data; a second member serving the same repositories
+      # would corrupt them. Slot 1 alone answers, fenced while it is unfit.
+      serve: primary
+  install: {}
+  start:
+    service: forgejo
+    restart: always
+  # Forgejo closes its listeners and finishes in-flight requests on SIGTERM; there is
+  # nothing to drain first, so no stop command — only the bounds.
+  stop:
+    timeout: 60s
+    grace: 30s
+  uninstall: {}
+files:
+  - install-forgejo.sh
+  - start-forgejo.sh
+  - uninstall-forgejo.sh
+platforms:
+  # The project publishes Linux binaries only — no Windows, no macOS.
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
