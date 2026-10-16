@@ -12,7 +12,7 @@ fail() {
 }
 
 note() {
-	echo "sglang start: $*" >&2
+	echo "sglang start: $*"
 }
 
 need() {
@@ -83,6 +83,27 @@ esac
 [ "$port" -ge 1 ] && [ "$port" -le 65535 ] ||
 	fail "SGLANG_SERVE_PORT is out of range: $port"
 
+# SGLang compiles some of its kernels when it first needs them — the AWQ
+# repack, for one, as a quantized model loads — with ninja and nvcc, and
+# DeepGEMM refuses to import at all without a CUDA toolkit to point at. The
+# wheels bring ninja and a CUDA toolkit inside the virtual environment, which
+# install lines up with the CUDA runtime torch was built for, but neither is
+# where anything looks: the server is started by path, not from an activated
+# environment. Put the environment first, as activating it would, and point
+# CUDA_HOME at its toolkit. A CUDA the operator set up wins.
+PATH="$prefix/venv/bin:$PATH"
+export PATH
+if [ -z "${CUDA_HOME:-}" ] && [ -z "${CUDA_PATH:-}" ] && ! command -v nvcc >/dev/null 2>&1 &&
+	[ ! -d /usr/local/cuda ]; then
+	for cuda in "$prefix"/venv/lib/python3*/site-packages/nvidia/cu*; do
+		if [ -x "$cuda/bin/nvcc" ]; then
+			CUDA_HOME=$cuda
+			export CUDA_HOME
+			break
+		fi
+	done
+fi
+
 hf_token=$(token_value)
 if [ -n "$hf_token" ]; then token_given=1; else token_given=0; fi
 
@@ -136,7 +157,7 @@ if [ -n "$hf_token" ]; then
 		unset HF_TOKEN
 		hf_token=''
 	elif [ -n "$hf_token" ]; then
-		note "warning: the Hugging Face CLI is missing from the install, so the token has to be passed to the server itself"
+		echo "sglang start: warning: the Hugging Face CLI is missing from the install, so the token has to be passed to the server itself" >&2
 	fi
 fi
 
@@ -163,9 +184,12 @@ else
 	unset HF_TOKEN 2>/dev/null || true
 fi
 
-# [::] and not 0.0.0.0: the probe dials the node's own addresses and, where the
-# endpoint is exposed publicly, a pool address that is usually IPv6. A socket
-# bound to the IPv4 wildcard has nothing listening for what arrives there.
+# An empty host, which binds every interface in both families: the probe and
+# the project network dial the node's IPv4 addresses, and a public endpoint is
+# usually reached over IPv6. Neither wildcard alone does: the server's event
+# loop marks a socket bound to [::] IPv6-only, so IPv4 is refused, and 0.0.0.0
+# has nothing listening for IPv6. SGLang reads the empty host as loopback for
+# its own internal requests.
 #
 # setpriv, never su or runuser: those start a new session, which would put the
 # server outside the process group the runtime signals.
@@ -176,6 +200,6 @@ exec setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_USER" --init-groups \
 	env -u HF_TOKEN_FILE HOME="$prefix" HF_HOME="$HF_HOME" \
 	"$python" -m sglang.launch_server \
 	--model-path "$MODEL" \
-	--host '::' \
+	--host '' \
 	--port "$port" \
 	--tp-size "$gpus"
