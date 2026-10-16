@@ -13,8 +13,10 @@ fail() {
 	exit 1
 }
 
+# Progress goes to stdout: the node log shows an install's stderr as warnings,
+# and a healthy install has nothing to warn about.
 note() {
-	echo "vllm install: $*" >&2
+	echo "vllm install: $*"
 }
 
 need() {
@@ -39,7 +41,7 @@ ensure_venv() {
 	[ "$(id -u)" -eq 0 ] ||
 		fail "python3 cannot create a virtual environment, and installing the package for it needs root"
 
-	echo "vllm install: installing the python3 virtual environment package" >&2
+	note "installing the python3 virtual environment package"
 	if command -v apt-get >/dev/null 2>&1; then
 		DEBIAN_FRONTEND=noninteractive apt-get update -qq
 		DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv
@@ -56,6 +58,40 @@ ensure_venv() {
 	fi
 	venv_works ||
 		fail "python3 still cannot create a virtual environment after installing the package"
+}
+
+# The server compiles kernels when it starts: torch.compile hands its graphs to
+# Triton, and Triton builds a small C launcher against the Python headers. A
+# fresh server image has neither a C compiler nor the headers, and the only sign
+# is an engine that dies at startup with "Failed to find C compiler" — after the
+# weights have been downloaded. Checked here, where it is cheap.
+python_headers() {
+	include=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["include"])' 2>/dev/null) &&
+		[ -f "$include/Python.h" ]
+}
+
+compiler_works() {
+	command -v cc >/dev/null 2>&1 && python_headers
+}
+
+ensure_compiler() {
+	compiler_works && return 0
+
+	note "installing a C compiler and the Python headers, which the server's kernel compiler needs"
+	if command -v apt-get >/dev/null 2>&1; then
+		DEBIAN_FRONTEND=noninteractive apt-get update -qq
+		DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gcc python3-dev
+	elif command -v dnf >/dev/null 2>&1; then
+		dnf install -y -q gcc python3-devel
+	elif command -v yum >/dev/null 2>&1; then
+		yum install -y -q gcc python3-devel
+	elif command -v zypper >/dev/null 2>&1; then
+		zypper --non-interactive --quiet install gcc python3-devel
+	else
+		fail "no C compiler or Python headers, and no supported package manager to install them"
+	fi
+	compiler_works ||
+		fail "still no C compiler or Python headers after installing them"
 }
 
 case "$(uname -s)" in
@@ -95,7 +131,7 @@ fi
 # A GPU is not needed to install, but a node without one will never serve, and
 # finding that out at install time is cheaper than at first request.
 if ! command -v nvidia-smi >/dev/null 2>&1; then
-	note "warning: nvidia-smi is not on this node; vLLM will not start without an NVIDIA GPU"
+	echo "vllm install: warning: nvidia-smi is not on this node; vLLM will not start without an NVIDIA GPU" >&2
 fi
 
 note "creating the virtual environment at $venv"
@@ -107,6 +143,7 @@ trap 'rm -rf "$prefix"' EXIT
 trap 'rm -rf "$prefix"; exit 1' HUP INT TERM
 
 ensure_venv
+ensure_compiler
 
 # pip verifies every wheel it installs against the hash the index publishes, and
 # the version is pinned exactly, so the node gets the release the operator chose
@@ -118,6 +155,25 @@ note "installing vllm==$APP_VERSION — the wheel and its CUDA payload are gigab
 	fail "could not install vllm==$APP_VERSION"
 
 [ -x "$venv/bin/vllm" ] || fail "the wheel installed no vllm command in $venv/bin"
+
+# FlashInfer, which the server samples and attends with, otherwise compiles its
+# kernels with nvcc on first start. The wheels bring an nvcc, but pip resolves
+# it independently of the CUDA headers torch pins, and the two drift apart (a
+# 13.4 compiler against 13.0 headers refuses to build). FlashInfer publishes
+# the same kernels prebuilt for every supported GPU generation, per release and
+# CUDA version, so nothing is compiled on the node and no CUDA toolkit is
+# needed. The version is exact, and the local `+cuXYZ` part exists only on
+# FlashInfer's index, so the extra index cannot substitute a PyPI package.
+flashinfer=$("$venv/bin/pip" show flashinfer-python 2>/dev/null | sed -n 's/^Version: //p')
+if [ -n "$flashinfer" ]; then
+	cuda=$("$venv/bin/python3" -c 'import torch; print((torch.version.cuda or "").replace(".", ""))' 2>/dev/null) ||
+		fail "could not read the CUDA version torch was built for"
+	[ -n "$cuda" ] || fail "the torch this release installed has no CUDA build"
+	note "installing FlashInfer's prebuilt kernels flashinfer=$flashinfer cuda=cu$cuda"
+	"$venv/bin/pip" install --no-cache-dir "flashinfer-jit-cache==$flashinfer+cu$cuda" \
+		--extra-index-url "https://flashinfer.ai/whl/cu$cuda" ||
+		fail "could not install FlashInfer's prebuilt kernels flashinfer-jit-cache==$flashinfer+cu$cuda"
+fi
 
 installed=$("$venv/bin/pip" show vllm 2>/dev/null | sed -n 's/^Version: //p')
 [ "$installed" = "$APP_VERSION" ] ||
