@@ -72,15 +72,15 @@ client library works against this the same way, with its base URL set to
 checked, because none is configured.
 
 From outside the project, go through the endpoint's access host — the pool's
-**Endpoints** tab shows it, for example `sys--vllm-gpu.sys.v0.orc8r.com`. The
-server signs the caller in before anything reaches the node, and an ORC8R API
-key in the `Authorization` header is what an OpenAI client sends anyway, so the
-key goes where the client expects its API key:
+**Endpoints** tab shows it. The server signs the caller in before anything
+reaches the node, and an API key in the `Authorization` header is what an
+OpenAI client sends anyway, so your account's API key goes where the client
+expects its API key:
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="https://<access-host>/v1", api_key="<ORC8R API key>")
+client = OpenAI(base_url="https://<access-host>/v1", api_key="<your API key>")
 client.chat.completions.create(
     model="Qwen/Qwen2.5-7B-Instruct-AWQ",
     messages=[{"role": "user", "content": "Hello"}],
