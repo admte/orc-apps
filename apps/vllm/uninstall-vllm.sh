@@ -9,7 +9,7 @@ set -eu
 # running as it, and a stray system account costs nothing.
 
 note() {
-	echo "vllm uninstall: $*" >&2
+	echo "vllm uninstall: $*"
 }
 
 fail() {
