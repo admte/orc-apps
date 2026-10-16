@@ -2,31 +2,31 @@ artifactType: application/vnd.orc8r.app.v1
 annotations:
   org.opencontainers.image.title: postgres
   # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
-  org.opencontainers.image.description: PostgreSQL as a managed service; one writer, streaming replicas
+  org.opencontainers.image.description: PostgreSQL database for your apps.
 config:
   params:
     type: object
-    required: [password]
+    required: [db_password]
     properties:
-      password:
+      db_name:
         type: string
-        title: Application password
-        description: Password of the application role; clients present it over TLS
+        title: Database name
+        description: Database created for your application
+        default: app
+      db_user:
+        type: string
+        title: Database username
+        description: User your application connects as; it owns the database
+        default: app
+      db_password:
+        type: string
+        title: Database password
+        description: Password for the database username; connections use TLS
         sensitive: true
-      app_user:
-        type: string
-        title: Application role
-        description: Login role created for the application
-        default: app
-      app_db:
-        type: string
-        title: Application database
-        description: Database created for the application, owned by the application role
-        default: app
       max_connections:
         type: string
         title: Max connections
-        description: PostgreSQL max_connections, a positive integer
+        description: Most client connections at once
         default: "100"
 
       # Everything below describes a deployment of more than one node, and all of it is

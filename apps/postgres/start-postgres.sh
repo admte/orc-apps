@@ -63,8 +63,8 @@ case "$PG_SLOT" in
 esac
 [ "$PG_SLOT" -ge 1 ] || pg_fail "SLOT must be 1 or higher, got '$PG_SLOT'"
 
-APP_USER=${APP_USER:-app}
-APP_DB=${APP_DB:-app}
+DB_USER=${DB_USER:-app}
+DB_NAME=${DB_NAME:-app}
 MAX_CONNECTIONS=${MAX_CONNECTIONS:-100}
 case "$MAX_CONNECTIONS" in
 '' | *[!0-9]*) pg_fail "MAX_CONNECTIONS must be a positive integer, got '$MAX_CONNECTIONS'" ;;
@@ -76,10 +76,10 @@ esac
 # app has started, and a later service-manager restart then runs with it gone. An
 # existing cluster already holds the role, so a start without it is not an error.
 app_password() {
-	if [ -z "${PASSWORD_FILE:-}" ] || [ ! -r "$PASSWORD_FILE" ]; then
+	if [ -z "${DB_PASSWORD_FILE:-}" ] || [ ! -r "$DB_PASSWORD_FILE" ]; then
 		return 0
 	fi
-	tr -d '\r\n' <"$PASSWORD_FILE"
+	tr -d '\r\n' <"$DB_PASSWORD_FILE"
 }
 
 # Copies one supplied PEM into the postgres account's TLS directory, and reports
@@ -485,7 +485,7 @@ adopt_cluster() {
 
 init_cluster() {
 	pgdata=$1
-	[ -n "$2" ] || pg_fail "a password is required to create the cluster; pass it as a file, e.g. --password=@/path/to/file"
+	[ -n "$2" ] || pg_fail "a password is required to create the cluster; pass it as a file, e.g. --db_password=@/path/to/file"
 	if [ -d "$pgdata" ] && [ -n "$(ls -A "$pgdata")" ]; then
 		pg_fail "$pgdata holds files but no PostgreSQL cluster; refusing to initialize over them"
 	fi
@@ -704,7 +704,7 @@ open_session() {
 	if [ "$status" -eq 0 ] && [ -n "$password" ]; then
 		pg_note "reconciling roles and the database over the socket"
 		psql_local -v ON_ERROR_STOP=1 -d postgres \
-			-v replicator="$REPLICATION_ROLE" -v app_user="$APP_USER" -v app_db="$APP_DB" \
+			-v replicator="$REPLICATION_ROLE" -v app_user="$DB_USER" -v app_db="$DB_NAME" \
 			-v password_file="$password_file" \
 			>/dev/null <<'SQL' || status=$?
 \set pw `cat :'password_file'`
@@ -720,7 +720,7 @@ SELECT format('CREATE DATABASE %I OWNER %I', :'app_db', :'app_user')
 WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'app_db')
 \gexec
 SQL
-		[ "$status" -ne 0 ] || pg_note "roles reconciled role=$APP_USER db=$APP_DB replication_role=$REPLICATION_ROLE"
+		[ "$status" -ne 0 ] || pg_note "roles reconciled role=$DB_USER db=$DB_NAME replication_role=$REPLICATION_ROLE"
 	elif [ "$status" -eq 0 ]; then
 		pg_note "no password supplied this start; leaving the existing roles as they are"
 	fi

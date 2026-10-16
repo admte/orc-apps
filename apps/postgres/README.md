@@ -15,7 +15,7 @@ One node, on a Debian or Ubuntu host:
 printf 'choose-a-password' | sudo tee /root/pg.password >/dev/null
 sudo chmod 600 /root/pg.password
 
-sudo orc install postgres --password=@/root/pg.password
+sudo orc install postgres --db_password=@/root/pg.password
 sudo orc start postgres
 ```
 
@@ -29,7 +29,7 @@ psql "host=<this-host> user=app dbname=app sslmode=require"
 
 # on the node itself
 sudo -u postgres psql                       # superuser, over the Unix socket
-psql -h /var/run/postgresql -U app -d app   # the application role
+psql -h /var/run/postgresql -U app -d app   # the database username and database
 ```
 
 ## Which PostgreSQL version
@@ -47,7 +47,7 @@ is a migration this package does not run for you.
 The recipe declares no version discovery, so the catalog offers only what is published.
 Add a `versions:` block to make a set of majors selectable.
 
-Sensitive parameters must be passed as a file (`--password=@<path>`) or a secret URI,
+Sensitive parameters must be passed as a file (`--db_password=@<path>`) or a secret URI,
 never as a literal on the command line. `orc start` reuses the parameters given to
 `orc install`, so they are only typed once. `orc status postgres`, `orc stop postgres`,
 and `orc uninstall postgres` do what they say.
@@ -60,13 +60,16 @@ nothing. Supply your own certificate and CA to get a verifiable one — see
 
 Required:
 
-- `password` - the application role's password, presented over TLS with SCRAM.
+- `db_password` - Database password: the password of the database username, presented
+  over TLS with SCRAM.
 
 Optional, with defaults:
 
-- `app_user` - the application role, default `app`.
-- `app_db` - the application database, owned by `app_user`, default `app`.
-- `max_connections` - PostgreSQL `max_connections`, default `100`.
+- `db_name` - Database name: the database created for your application, owned by the
+  database username, default `app`.
+- `db_user` - Database username: the login role your application connects as, default
+  `app`.
+- `max_connections` - Max connections: PostgreSQL `max_connections`, default `100`.
 
 Optional, and only needed for more than one node or for verifiable TLS:
 
@@ -98,7 +101,7 @@ On node 1:
 
 ```bash
 sudo orc install postgres \
-  --password=@/root/pg.password \
+  --db_password=@/root/pg.password \
   --slot=1 --pool=db \
   --ca=@/etc/pki/ca.pem \
   --server-cert=@/etc/pki/node1.crt --server-key=@/etc/pki/node1.key
@@ -109,7 +112,7 @@ On node 2:
 
 ```bash
 sudo orc install postgres \
-  --password=@/root/pg.password \
+  --db_password=@/root/pg.password \
   --slot=2 --pool=db --writer=node1.example.com \
   --ca=@/etc/pki/ca.pem \
   --server-cert=@/etc/pki/node2.crt --server-key=@/etc/pki/node2.key \
@@ -354,9 +357,9 @@ node number:
 - *Node 1* creates the cluster if the durable root is empty (`initdb`, data checksums, no
   superuser password) or adopts the one already there, refusing a cluster from another
   major version. It writes the managed settings, then creates the replication role, the
-  application role and the application database on a socket-only postmaster, sets the
+  database username and the database on a socket-only postmaster, sets the
   application password, and `exec`s the real server. Because that runs on every start, an
-  edited `password` or `max_connections` takes effect on the restart the edit triggers.
+  edited `db_password` or `max_connections` takes effect on the restart the edit triggers.
   A start with no password supplied and a cluster already present leaves the roles alone
   rather than failing, so a bare service restart after the parameter file is withdrawn
   does not turn into a crash loop.
@@ -415,12 +418,12 @@ is useful when debugging a node:
 
 ```bash
 sudo sh install-postgres.sh
-sudo env SLOT=1 POOL=db PASSWORD_FILE=/root/pg.password sh start-postgres.sh
+sudo env SLOT=1 POOL=db DB_PASSWORD_FILE=/root/pg.password sh start-postgres.sh
 ```
 
-`<PARAM>_FILE` variables (`PASSWORD_FILE`, `CA_FILE`, `SERVER_CERT_FILE`,
+`<PARAM>_FILE` variables (`DB_PASSWORD_FILE`, `CA_FILE`, `SERVER_CERT_FILE`,
 `SERVER_KEY_FILE`, `CLIENT_CERT_FILE`, `CLIENT_KEY_FILE`) are how file-backed parameters
-arrive; plain ones arrive upper-cased (`SLOT`, `POOL`, `WRITER`, `APP_USER`, `APP_DB`,
+arrive; plain ones arrive upper-cased (`SLOT`, `POOL`, `WRITER`, `DB_USER`, `DB_NAME`,
 `MAX_CONNECTIONS`). `peers` arrives as `PEERS_FILE`, or may be given as `PEERS`, one name
 per line. Several nodes can share one machine for testing: give each its own `APP_ROOT`,
 `PG_PORT` and `PG_SOCKET_DIR`, write `WRITER` and the peers as `host:port`, and run as the
