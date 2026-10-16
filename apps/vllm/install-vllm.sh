@@ -134,15 +134,24 @@ if ! command -v nvidia-smi >/dev/null 2>&1; then
 	echo "vllm install: warning: nvidia-smi is not on this node; vLLM will not start without an NVIDIA GPU" >&2
 fi
 
-note "creating the virtual environment at $venv"
-rm -rf "$prefix"
-mkdir -p "$prefix"
-# An hour-long install that is interrupted must not leave a half-built tree
-# behind for start to find. The signal trap exits, so the EXIT trap runs once.
-trap 'rm -rf "$prefix"' EXIT
-trap 'rm -rf "$prefix"; exit 1' HUP INT TERM
-
-ensure_venv
+# Install runs again over a version that is already there — a repair, or the
+# same version re-resolved to a newer package — and the server may be running
+# from that tree. A finished install is kept and completed in place: the pip
+# steps below confirm what is there and add what is missing. Only a tree that
+# never finished is thrown away.
+done_marker="$prefix/.installed"
+if [ -f "$done_marker" ] && [ -x "$venv/bin/vllm" ]; then
+	note "completing the existing install at $prefix"
+else
+	note "creating the virtual environment at $venv"
+	rm -rf "$prefix"
+	mkdir -p "$prefix"
+	# An hour-long install that is interrupted must not leave a half-built tree
+	# behind for start to find. The signal trap exits, so the EXIT trap runs once.
+	trap 'rm -rf "$prefix"' EXIT
+	trap 'rm -rf "$prefix"; exit 1' HUP INT TERM
+	ensure_venv
+fi
 ensure_compiler
 
 # pip verifies every wheel it installs against the hash the index publishes, and
@@ -195,5 +204,6 @@ if [ -e "$root/current" ] && [ ! -L "$root/current" ]; then
 fi
 ln -sfn "$prefix" "$root/current" || fail "could not point $root/current at $prefix"
 
+: >"$done_marker" || fail "could not mark $prefix as installed"
 trap - EXIT HUP INT TERM
 note "vllm $installed installed at $prefix"
