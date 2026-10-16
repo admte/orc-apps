@@ -288,8 +288,7 @@ ssl_min_protocol_version = 'TLSv1.2'
 password_encryption = scram-sha-256
 
 # Streaming replication. Each replica holds a physical slot on node 1 (replica_<N>), so
-# node 1 keeps exactly the WAL its replicas still need; no extra WAL is kept by size, so
-# a lone node's pg_wal (and every capture of it) holds only what crash recovery needs.
+# node 1 keeps exactly the WAL its replicas still need; no extra WAL is kept by size.
 # The slot's hold is bounded: past max_slot_wal_keep_size node 1 gives the slot up
 # rather than fill its disk, and that replica re-seeds.
 wal_level = replica
@@ -312,6 +311,13 @@ max_wal_size = '${TUNE_MAX_WAL_MB}MB'
 min_wal_size = '${TUNE_MIN_WAL_MB}MB'
 checkpoint_timeout = '15min'
 checkpoint_completion_target = 0.9
+
+# A segment no longer needed is deleted at the checkpoint rather than renamed and kept
+# for reuse. Kept segments are rewritten with new WAL as they are reused, so under writes
+# every capture carried pg_wal at close to max_wal_size, nearly all of it spares; with
+# them deleted, a capture after the pre-capture checkpoint holds only the WAL still
+# needed. Write throughput measured the same either way. min_wal_size is moot with it.
+wal_recycle = off
 
 # Logs go to the service's stderr, where the supervisor collects them.
 log_destination = 'stderr'

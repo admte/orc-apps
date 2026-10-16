@@ -373,7 +373,12 @@ taking an inconsistent one.
 **Sizing** comes from the machine on every start: `shared_buffers` a quarter of memory,
 `effective_cache_size` three quarters, `max_wal_size` a quarter of the data directory's
 file system (96 MB to 4 GB), `checkpoint_timeout` 15 minutes. No WAL is kept by size
-(`wal_keep_size = 0`): replicas are covered by their slots. `ALTER SYSTEM` overrides any of them.
+(`wal_keep_size = 0`): replicas are covered by their slots. WAL segments are not recycled
+(`wal_recycle = off`): a segment no longer needed is deleted at the checkpoint instead of
+kept for reuse, so a capture after the hook's checkpoint carries only the WAL still needed
+rather than `pg_wal` filled toward `max_wal_size` with spares. On a 5 GB volume under a
+steady write load this cut each capture from 1.7 GB to about 440 MB (upload 138 s to
+15 s), with write throughput unchanged. `ALTER SYSTEM` overrides any of them.
 
 ## Automatic configuration
 
