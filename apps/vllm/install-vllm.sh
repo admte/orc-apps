@@ -23,6 +23,10 @@ need() {
 	command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
 }
 
+# NEEDRESTART_SUSPEND on every apt-get: Ubuntu's needrestart hook reports on
+# stderr after each install, and the node log shows that as warnings about
+# services nobody asked to restart.
+
 # python3 on its own is not enough: Debian and Ubuntu ship it without the piece
 # that creates virtual environments, and Alpine without the piece that seeds pip
 # into one. Same shape as gcloud's ensure_python and the ensure_unzip in aws,
@@ -43,8 +47,8 @@ ensure_venv() {
 
 	note "installing the python3 virtual environment package"
 	if command -v apt-get >/dev/null 2>&1; then
-		DEBIAN_FRONTEND=noninteractive apt-get update -qq
-		DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv
+		DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 apt-get update -qq
+		DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 apt-get install -y -qq python3-venv
 	elif command -v dnf >/dev/null 2>&1; then
 		dnf install -y -q python3-pip
 	elif command -v yum >/dev/null 2>&1; then
@@ -79,8 +83,8 @@ ensure_compiler() {
 
 	note "installing a C compiler and the Python headers, which the server's kernel compiler needs"
 	if command -v apt-get >/dev/null 2>&1; then
-		DEBIAN_FRONTEND=noninteractive apt-get update -qq
-		DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gcc python3-dev
+		DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 apt-get update -qq
+		DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 apt-get install -y -qq gcc python3-dev
 	elif command -v dnf >/dev/null 2>&1; then
 		dnf install -y -q gcc python3-devel
 	elif command -v yum >/dev/null 2>&1; then
