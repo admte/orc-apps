@@ -15,7 +15,7 @@ PG_PHASE=install
 
 # Already installed: nothing to do. Keeps pool-image bakes idempotent.
 if [ -x "$PG_BIN/postgres" ]; then
-	"$PG_BIN/postgres" --version >&2
+	"$PG_BIN/postgres" --version
 	exit 0
 fi
 
@@ -24,6 +24,9 @@ command -v apt-get >/dev/null 2>&1 || pg_fail "unsupported distribution: apt-get
 pg_need systemctl
 
 export DEBIAN_FRONTEND=noninteractive
+# needrestart's apt hook reports on stderr which services it restarted after each
+# install, and stderr is logged as a warning; a freshly built image has nothing to say.
+export NEEDRESTART_SUSPEND=1
 
 distro=debian
 codename=""
@@ -96,5 +99,5 @@ mkdir -p "$APP_ROOT/replica" "$TLS_DIR"
 chown "$PG_OS_USER:$PG_OS_USER" "$APP_ROOT/replica" "$TLS_DIR"
 chmod 0700 "$APP_ROOT/replica" "$TLS_DIR"
 
-"$PG_BIN/postgres" --version >&2
+"$PG_BIN/postgres" --version
 pg_note "complete bin=$PG_BIN"
