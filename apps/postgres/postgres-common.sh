@@ -72,7 +72,14 @@ IDENT_MAP=certmap
 PG_SLOT=${SLOT:-1}
 CLUSTER_NAME=${POOL:-postgres}
 
+# The supervisor logs what an app prints on stdout as information and what it prints on
+# stderr as a warning, so the two say different things: pg_note is the recipe going about
+# its work, pg_warn is something wrong that a person may need to look at.
 pg_note() {
+	echo "postgres $PG_PHASE: $*"
+}
+
+pg_warn() {
 	echo "postgres $PG_PHASE: $*" >&2
 }
 

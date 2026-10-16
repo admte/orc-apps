@@ -23,7 +23,13 @@ LAG_WARN_SECONDS=${LAG_WARN_SECONDS:-1}
 QUIET_EVERY=600
 LOUD_EVERY=60
 
+# Routine readings go to stdout (information); a replica too far behind, or not
+# streaming at all, goes to stderr, which the supervisor logs as a warning.
 pg_note() {
+	echo "postgres lag: $*"
+}
+
+pg_warn() {
 	echo "postgres lag: $*" >&2
 }
 
@@ -80,6 +86,7 @@ last=0
 while alive; do
 	now=$(date +%s)
 	loud=no
+	parked=no
 	line=""
 	if pg_is_writer; then
 		rows=$(writer_report || true)
@@ -101,6 +108,7 @@ ROWS
 	else
 		if [ -s "$PARKED" ]; then
 			line="PARKED: $(cat "$PARKED"); release with: touch $RELEASE_PARKED, then restart the app"
+			parked=yes
 		else
 			row=$(sql "SELECT status, COALESCE(round(extract(epoch FROM now() - pg_last_xact_replay_timestamp())::numeric, 1)::text, '-') FROM pg_stat_wal_receiver" || true)
 			status=${row%% *}
@@ -117,7 +125,9 @@ ROWS
 	[ "$loud" = no ] || every=$LOUD_EVERY
 	if [ -n "$line" ] && [ $((now - last)) -ge "$every" ]; then
 		if [ "$loud" = yes ]; then
-			pg_note "WARNING: $line"
+			pg_warn "WARNING: $line"
+		elif [ "$parked" = yes ]; then
+			pg_warn "$line"
 		else
 			pg_note "$line"
 		fi

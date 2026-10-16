@@ -31,11 +31,11 @@ PG_PHASE=start
 . "$SCRIPT_DIR/postgres-position.sh"
 
 pg_hold() {
-	pg_note "HOLD: $*"
-	pg_note "HOLD: this node stays down until the app is restarted"
+	pg_warn "HOLD: $*"
+	pg_warn "HOLD: this node stays down until the app is restarted"
 	while :; do
 		sleep 600
-		pg_note "HOLD: $*"
+		pg_warn "HOLD: $*"
 	done
 }
 pg_fail() {
@@ -599,7 +599,7 @@ writer_decide() {
 			count=$(echo "$unknown" | wc -w)
 			why="$count of $n nodes unknown"
 			[ "$conflict" = no ] || why="$why, and the nodes ahead of this one hold data that diverged from each other"
-			pg_note "WAIT round $round: $why: $report; asking again in ${pause}s; to stop waiting: touch $FORCE_START"
+			pg_warn "WAIT round $round: $why: $report; asking again in ${pause}s; to stop waiting: touch $FORCE_START"
 			sleep "$pause"
 			pause=$((pause * 2))
 			[ "$pause" -le 60 ] || pause=60
@@ -607,7 +607,7 @@ writer_decide() {
 		fi
 
 		if [ "$forced" = yes ]; then
-			pg_note "FORCED by $FORCE_START: going on without$unknown; writes only they hold are given up: $report"
+			pg_warn "FORCED by $FORCE_START: going on without$unknown; writes only they hold are given up: $report"
 			if [ "$conflict" = yes ]; then
 				# Of candidates that diverged from each other, take the newest timeline,
 				# then the furthest position.
@@ -629,7 +629,7 @@ writer_decide() {
 				pg_note "copying from $c_peer ($(pg_show_position "$c_sysid" "$c_tli" "$c_lsn"); this node holds no cluster)"
 			fi
 			if ! copy_from "$c_peer" "$pgdata"; then
-				pg_note "the copy from $c_peer failed; deciding again"
+				pg_warn "the copy from $c_peer failed; deciding again"
 				sleep "$pause"
 				continue
 			fi
@@ -637,7 +637,7 @@ writer_decide() {
 		elif [ "$have_local" = yes ]; then
 			promote=yes
 		elif [ "$forced" = yes ]; then
-			pg_note "FORCED with no data on any node that answered: creating a NEW, EMPTY database"
+			pg_warn "FORCED with no data on any node that answered: creating a NEW, EMPTY database"
 		else
 			pg_note "no node holds data: creating a new database"
 		fi
@@ -659,7 +659,7 @@ copy_from() {
 	log="$STATE_DIR/copy.log"
 	if ! pg_as_postgres "$PG_BIN/pg_basebackup" -D "$pgdata" -X stream --checkpoint=fast \
 		--no-password -d "$(pg_peer_conninfo "$peer")" 2>"$log"; then
-		pg_note "pg_basebackup from $peer failed: $(tail -n 3 "$log" | tr '\n' ' ')"
+		pg_warn "pg_basebackup from $peer failed: $(tail -n 3 "$log" | tr '\n' ' ')"
 		rm -rf "$pgdata"
 		prepare_dir "$pgdata"
 		return 1
@@ -698,7 +698,7 @@ open_session() {
 			pg_note "on a new timeline: $(psql_local -d postgres -A -t -c "SELECT ('x' || substr(pg_walfile_name(pg_current_wal_lsn()), 1, 8))::bit(32)::int || ', at ' || pg_current_wal_lsn()" 2>/dev/null || echo '?')"
 		else
 			status=1
-			pg_note "promotion failed"
+			pg_warn "promotion failed"
 		fi
 	fi
 	if [ "$status" -eq 0 ] && [ -n "$password" ]; then
@@ -799,7 +799,7 @@ start_replica() {
 			aside="$REPLICA_LOCAL/unreadable-$(date -u +%Y%m%dT%H%M%SZ)"
 			rm -rf "$REPLICA_LOCAL"/unreadable-*
 			mv "$pgdata" "$aside"
-			pg_note "this replica's control file cannot be read; its files are kept at $aside and it seeds afresh"
+			pg_warn "this replica's control file cannot be read; its files are kept at $aside and it seeds afresh"
 		fi
 	elif [ -d "$pgdata" ]; then
 		rm -rf "$pgdata"
@@ -823,7 +823,7 @@ start_replica() {
 			if catch_up "$pgdata" "$ASK_LSN"; then
 				follow "$pgdata"
 			fi
-			pg_note "this replica cannot catch up from node 1 (the WAL it needs is gone); its data is contained in node 1's, so it seeds afresh"
+			pg_warn "this replica cannot catch up from node 1 (the WAL it needs is gone); its data is contained in node 1's, so it seeds afresh"
 			rm -rf "$pgdata"
 			seed_replica "$pgdata"
 			follow "$pgdata"
@@ -835,7 +835,7 @@ start_replica() {
 		park "$pgdata" "$reason"
 		;;
 	*)
-		pg_note "node 1 does not answer ($ASK_REASON); keeping this replica's data ($local_desc) and following node 1 when it is back"
+		pg_warn "node 1 does not answer ($ASK_REASON); keeping this replica's data ($local_desc) and following node 1 when it is back"
 		follow "$pgdata"
 		;;
 	esac
@@ -852,7 +852,7 @@ follow() {
 # it, a later node 1 can ask where it ends, and the readiness probe reports unready.
 park() {
 	printf '%s\n' "$2" >"$PARKED"
-	pg_note "PARKED: $2. The data is kept and served read-only; nothing streams into it. To discard it from this replica (it is moved aside, not deleted) and seed from node 1: touch $RELEASE_PARKED and restart the app"
+	pg_warn "PARKED: $2. The data is kept and served read-only; nothing streams into it. To discard it from this replica (it is moved aside, not deleted) and seed from node 1: touch $RELEASE_PARKED and restart the app"
 	write_config "$1" parked
 	exec_postgres "$1"
 }
@@ -889,7 +889,7 @@ catch_up() {
 		pg_note "streaming from node 1 and caught up to $(lsn_hex "$target")"
 		return 0
 	fi
-	pg_note "not caught up within ${timeout}s: $(grep -E 'FATAL|ERROR' "$BOOTSTRAP_LOG" | tail -n 2 | tr '\n' ' ')"
+	pg_warn "not caught up within ${timeout}s: $(grep -E 'FATAL|ERROR' "$BOOTSTRAP_LOG" | tail -n 2 | tr '\n' ' ')"
 	return 1
 }
 
@@ -923,7 +923,7 @@ seed_replica() {
 			$slot_opt --no-password -d "$(writer_conninfo)" 2>"$log"; then
 			break
 		fi
-		pg_note "seeding from $WRITER failed, retrying in ${SEED_INTERVAL}s: $(tail -n 2 "$log" | tr '\n' ' ')"
+		pg_warn "seeding from $WRITER failed, retrying in ${SEED_INTERVAL}s: $(tail -n 2 "$log" | tr '\n' ' ')"
 		rm -rf "$pgdata"
 		sleep "$SEED_INTERVAL"
 	done
@@ -945,14 +945,14 @@ standin_start() {
 	standin_stop
 	prepare_dir "$STANDIN_DIR"
 	if [ "$PG_HAVE_CA" != yes ]; then
-		pg_note "no ca: the stand-in cannot authenticate node 1, so this node does not answer as empty"
+		pg_warn "no ca: the stand-in cannot authenticate node 1, so this node does not answer as empty"
 		return 0
 	fi
 	data="$STANDIN_DIR/data"
 	pg_as_postgres "$PG_BIN/initdb" -D "$data" -U "$REPLICATION_ROLE" --no-sync \
 		--auth-local=reject --auth-host=reject --encoding=UTF8 --locale=C.UTF-8 \
 		>"$STANDIN_DIR/initdb.log" 2>&1 || {
-		pg_note "the stand-in could not be created: $(tail -n 2 "$STANDIN_DIR/initdb.log" | tr '\n' ' ')"
+		pg_warn "the stand-in could not be created: $(tail -n 2 "$STANDIN_DIR/initdb.log" | tr '\n' ' ')"
 		return 0
 	}
 	{
@@ -968,7 +968,7 @@ standin_start() {
 -c reserved_connections=0 -c shared_buffers=1MB -c max_wal_senders=2 -c fsync=off \
 -c ssl=on -c ssl_cert_file='$TLS_DIR/server.crt' -c ssl_key_file='$TLS_DIR/server.key' \
 -c ssl_ca_file='$TLS_DIR/ca.pem'" || {
-		pg_note "the stand-in did not start: $(tail -n 3 "$STANDIN_DIR/log" | tr '\n' ' ')"
+		pg_warn "the stand-in did not start: $(tail -n 3 "$STANDIN_DIR/log" | tr '\n' ' ')"
 		return 0
 	}
 	pg_note "no cluster here: answering as empty until node 1 opens"
@@ -986,7 +986,7 @@ standin_stop() {
 exec_postgres() {
 	# The watcher logs replication lag and states next to the server. It is detached from
 	# this process before the exec, so the postmaster never inherits it as a child.
-	(sh "$SCRIPT_DIR/watch-postgres.sh" "$$" </dev/null >/dev/null &)
+	(sh "$SCRIPT_DIR/watch-postgres.sh" "$$" </dev/null &)
 	if [ "$(id -u)" -eq "$(id -u "$PG_OS_USER")" ]; then
 		exec env PATH="$PG_BIN:/usr/bin:/bin" "$PG_BIN/postgres" -D "$1"
 	fi

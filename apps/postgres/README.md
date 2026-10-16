@@ -293,6 +293,12 @@ node 1` every minute while it is not streaming, and a parked replica repeats its
 reason every ten minutes. A small watcher started next to the server writes these lines,
 in the same service and to the same log.
 
+Log levels follow the supervisor's rule that stdout is information and stderr a
+warning: the recipe's ordinary progress goes to stdout, while `HOLD`, `WAIT`, `FORCED`,
+`PARKED`, failed copies or seeds, and lag past the threshold or a replica not streaming go
+to stderr. The capture hook logs nothing unless it refuses a capture, since it runs every
+few minutes.
+
 The `pg` endpoint's readiness probe (`probe-postgres.sh`) is ready only while the server
 takes connections and the node is not waiting, copying, answering as empty, or parked.
 

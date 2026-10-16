@@ -219,7 +219,7 @@ ensure_slot() {
 	case "$out" in
 	*"already exists"*) return 0 ;;
 	esac
-	pg_note "could not make sure node 1 holds slot $(slot_name "$PG_SLOT"): $(printf '%s' "$out" | tr '\n' ' ')"
+	pg_warn "could not make sure node 1 holds slot $(slot_name "$PG_SLOT"): $(printf '%s' "$out" | tr '\n' ' ')"
 	return 1
 }
 # Human form of a position, for the log.
