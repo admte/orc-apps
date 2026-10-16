@@ -136,7 +136,9 @@ Uninstalling one version leaves it; uninstalling the last one removes it.
   runs as, and points `/opt/vllm/current` at it. It decides nothing about this
   node: no model, no port. A pool bake runs this phase alone and snapshots the
   disk, so anything node-specific would be shared by every clone. An interrupted
-  install cleans up after itself rather than leaving a half-built tree.
+  install cleans up after itself rather than leaving a half-built tree, and an
+  install run again over a finished one completes it in place, so a server
+  running from that tree keeps its files.
 - **start** counts the GPUs, fetches a gated model if a token was given, and
   execs the server as the `vllm` account. It uses the version it was installed
   as, falling back to `current` — so the package also starts by hand, with no
