@@ -319,7 +319,7 @@ checkpoint_completion_target = 0.9
 # needed. Write throughput measured the same either way. min_wal_size is moot with it.
 wal_recycle = off
 
-# Logs go to the service's stderr, where the supervisor collects them.
+# Logs go to the service's stderr, through the filter that sets each line's level.
 log_destination = 'stderr'
 logging_collector = off
 log_line_prefix = '%m [%p] %q%u@%d '
@@ -987,12 +987,29 @@ exec_postgres() {
 	# The watcher logs replication lag and states next to the server. It is detached from
 	# this process before the exec, so the postmaster never inherits it as a child.
 	(sh "$SCRIPT_DIR/watch-postgres.sh" "$$" </dev/null &)
+	# The server writes its whole log to stderr. It goes through a FIFO to
+	# postgres-log.awk, which passes trouble on to stderr (a warning in the node log) and
+	# everything else to stdout (information); see "What an operator sees" in README.md. The postmaster
+	# stays this process. fd 3 holds the FIFO open read-write while the two ends are
+	# opened, so neither open waits for the other, and is closed before the exec: from
+	# then on the filter is the only reader, so if it ever died a log write would fail
+	# (the server ignores SIGPIPE) rather than block. The filter ignores the stop signal,
+	# which reaches every process of the service, and ends at end of file, once the
+	# postmaster and its children have exited and written their last lines.
+	fifo="$STATE_DIR/log.fifo"
+	rm -f "$fifo"
+	mkfifo -m 600 "$fifo"
+	exec 3<>"$fifo"
+	(
+		trap '' HUP INT TERM
+		awk -f "$SCRIPT_DIR/postgres-log.awk" <"$fifo" 3<&- &
+	)
 	if [ "$(id -u)" -eq "$(id -u "$PG_OS_USER")" ]; then
-		exec env PATH="$PG_BIN:/usr/bin:/bin" "$PG_BIN/postgres" -D "$1"
+		exec env PATH="$PG_BIN:/usr/bin:/bin" "$PG_BIN/postgres" -D "$1" 2>"$fifo" 3<&-
 	fi
 	exec setpriv --reuid="$PG_OS_USER" --regid="$PG_OS_USER" --init-groups \
 		env HOME=/var/lib/postgresql PATH="$PG_BIN:/usr/bin:/bin" \
-		"$PG_BIN/postgres" -D "$1"
+		"$PG_BIN/postgres" -D "$1" 2>"$fifo" 3<&-
 }
 
 stage_tls

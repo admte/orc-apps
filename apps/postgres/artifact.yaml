@@ -169,6 +169,7 @@ files:
   - hook-pre-postgres.sh
   - postgres-position.sh
   - watch-postgres.sh
+  - postgres-log.awk
   - probe-postgres.sh
 platforms:
   - os: linux

@@ -212,9 +212,15 @@ writer_conninfo() {
 # Makes sure node 1 holds this replica's slot. Node 1 creates the slots of the nodes it
 # knows of when it opens; a replica whose slot node 1 lacks (added by hand, or node 1
 # copied its cluster from a node and could not tell the others' numbers) creates its own.
+# It asks first, so node 1 does not log an "already exists" error for every replica start.
 ensure_slot() {
-	out=$(pg_as_postgres "$PG_BIN/psql" -X -A -t -q -w \
-		-d "$(writer_conninfo) replication=true" \
+	conn="$(writer_conninfo) replication=true"
+	out=$(pg_as_postgres "$PG_BIN/psql" -X -A -t -q -w -d "$conn" \
+		-c "READ_REPLICATION_SLOT $(slot_name "$PG_SLOT")" 2>&1) || out=""
+	case "$out" in
+	physical"|"*) return 0 ;;
+	esac
+	out=$(pg_as_postgres "$PG_BIN/psql" -X -A -t -q -w -d "$conn" \
 		-c "CREATE_REPLICATION_SLOT $(slot_name "$PG_SLOT") PHYSICAL RESERVE_WAL" 2>&1) && return 0
 	case "$out" in
 	*"already exists"*) return 0 ;;

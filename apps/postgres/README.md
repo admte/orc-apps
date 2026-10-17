@@ -302,6 +302,36 @@ warning: the recipe's ordinary progress goes to stdout, while `HOLD`, `WAIT`, `F
 to stderr. The capture hook logs nothing unless it refuses a capture, since it runs every
 few minutes.
 
+PostgreSQL's own log (`log_destination = 'stderr'`, prefix `%m [%p] %q%u@%d `) is written
+to the same service log through `postgres-log.awk`, so a healthy node logs no warnings:
+
+- **warning (stderr)**: `ERROR`, `FATAL` and `PANIC`; a `WARNING` from the server itself
+  (no `user@db` in the prefix), and a transaction-wraparound warning from any session; and
+  the `LOG` lines that report trouble — a server process terminated by a signal, the
+  restart of all sessions that follows, `not properly shut down` (crash recovery), and an
+  obsolete replication slot invalidated.
+- **information (stdout)**: everything else — `LOG`, `INFO`, `NOTICE`, `DEBUG`; a
+  `WARNING` sent to a client's session (`skipping "t" --- only table or database owner can
+  analyze it`, `there is no transaction in progress`), which is the client's to act on; and
+  the `FATAL`s of a routine start or stop: `the database system is starting up` / `shutting
+  down` / `not yet accepting connections`, and sessions ended `due to administrator
+  command` by a fast shutdown.
+- `DETAIL`, `HINT`, `CONTEXT`, `STATEMENT`, `QUERY` and `LOCATION` lines, and the
+  continuation lines of a message that spans several, go where the line they belong to went.
+- A replica that cannot reach node 1 retries every 5 s; its `could not connect to the
+  primary server` (and `could not start WAL streaming`) is written at most once a minute,
+  saying how many repeats were not shown, and when streaming starts again the count of the
+  rest is logged as information.
+
+A replica asks node 1 for its slot (`READ_REPLICATION_SLOT`) before creating it, so node 1
+does not log `replication slot "replica_<N>" already exists` on every replica start; when a
+replica and node 1 still race to create it, that one error is logged as information.
+
+The postmaster stays the service's main process: `start-postgres.sh` execs it with its
+stderr on a FIFO (`/var/lib/orc-postgres/state/log.fifo`) that the filter reads. The filter ignores the stop signal and
+exits at end of file, once the server and its children have written their last lines; if
+the filter ever died, the server's log writes would fail rather than block.
+
 The `pg` endpoint's readiness probe (`probe-postgres.sh`) is ready only while the server
 takes connections and the node is not waiting, copying, answering as empty, or parked.
 
