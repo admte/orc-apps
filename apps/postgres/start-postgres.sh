@@ -492,11 +492,14 @@ init_cluster() {
 	prepare_dir "$pgdata"
 	pg_note "initializing a new cluster"
 	# No --pwfile: the superuser gets no password, on purpose. Host access is closed
-	# until pg_hba.conf is written.
-	pg_as_postgres "$PG_BIN/initdb" -D "$pgdata" \
+	# until pg_hba.conf is written. Its report is routine; it is shown only on failure.
+	if ! pg_as_postgres "$PG_BIN/initdb" -D "$pgdata" \
 		--auth-local=peer --auth-host=reject \
-		--encoding=UTF8 --locale=C.UTF-8 --data-checksums >&2 ||
+		--encoding=UTF8 --locale=C.UTF-8 --data-checksums >"$STATE_DIR/initdb.log" 2>&1; then
+		cat "$STATE_DIR/initdb.log" >&2
 		pg_fail "initdb failed"
+	fi
+	rm -f "$STATE_DIR/initdb.log"
 }
 
 # Node 1 without proof that it holds the newest data: ask every other node where its
