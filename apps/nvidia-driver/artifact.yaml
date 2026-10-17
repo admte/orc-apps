@@ -1,0 +1,22 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: nvidia-driver
+  org.opencontainers.image.description: NVIDIA GPU driver from the distribution's signed packages, rebooting once if the module cannot load in place
+config:
+  # No parameters: the distribution's driver tool picks the branch and the open
+  # or proprietary flavour for the GPU it finds, which is the choice an operator
+  # would otherwise have to look up per card. A branch setting can be added
+  # later; removing one is not free.
+  #
+  # Install only, resolved by the naming convention (`install-nvidia-driver.sh`).
+  # The timeout bounds one pass: a reboot ends the pass, and the pass after the
+  # reboot starts the clock again.
+  install:
+    timeout: 1800s
+files:
+  - install-nvidia-driver.sh
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
