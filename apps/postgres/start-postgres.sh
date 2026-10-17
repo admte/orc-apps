@@ -422,7 +422,7 @@ start_private() {
 	# only place it shows. Information, not a warning: a cluster restored from a capture
 	# of a running server recovers the same way.
 	if grep -q 'not properly shut down' "$BOOTSTRAP_LOG"; then
-		pg_note "the cluster was not shut down cleanly (the server was killed, the machine stopped, or it was restored from a capture); PostgreSQL replayed its WAL: $(grep -E 'redo (starts|done)' "$BOOTSTRAP_LOG" | sed 's/^.*LOG:  //' | tr '\n' ' ')"
+		pg_note "the cluster was not shut down cleanly (the server was killed, the machine stopped, or it was restored from a capture); PostgreSQL recovered from its WAL: $(grep -E 'redo (starts|done|is not required)' "$BOOTSTRAP_LOG" | sed 's/^.*LOG:  //' | tr '\n' ' ')"
 	fi
 }
 
