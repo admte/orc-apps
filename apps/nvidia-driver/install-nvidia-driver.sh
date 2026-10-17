@@ -75,9 +75,8 @@ esac
 
 gpus=$(nvidia_gpus)
 if [ "$gpus" -eq 0 ]; then
-	# A pool image is built on a machine without the GPU, so there is no card to
-	# pick a driver for. The nodes that boot from it on GPU hardware install the
-	# driver on their first pass.
+	# No card to pick a driver for. A pool image is built on the pool's own kind
+	# of machine, so a GPU pool's image is built with the GPU present.
 	note "no NVIDIA GPU on this node; nothing to install"
 	rm -f "$reboot_marker"
 	exit 0

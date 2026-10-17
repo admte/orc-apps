@@ -15,9 +15,10 @@ be free.
 
 ## What one pass does
 
-1. **No NVIDIA GPU on the node:** nothing to do, and the pass succeeds. A pool
-   image is built on a machine without the GPU; the nodes booted from it on GPU
-   hardware install the driver on their own first pass.
+1. **No NVIDIA GPU on the node:** nothing to do, and the pass succeeds. The app
+   in a pool of machines without GPUs costs nothing. A pool image is built on
+   the pool's own kind of machine, so a GPU pool's image is built with the GPU
+   present and carries the driver.
 2. **The driver is loaded** (`nvidia-smi` lists the GPUs): nothing to do. A node
    that already has a working driver keeps it, whichever branch it is.
 3. Otherwise it runs `ubuntu-drivers install --gpgpu`, the headless set — the
