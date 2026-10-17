@@ -1,0 +1,63 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: pgconsumer
+  org.opencontainers.image.description: TEST ONLY. Dials another pool's Postgres every 15 s with verify-full.
+config:
+  params:
+    type: object
+    required: [db_password]
+    properties:
+      db_name:
+        type: string
+        title: Database name
+        default: app
+      db_user:
+        type: string
+        title: Database username
+        default: app
+      db_password:
+        type: string
+        title: Database password
+        sensitive: true
+      # The Postgres pool this consumer dials: pool "pgs" in project "pgtest".
+      writer:
+        type: string
+        title: Writer name
+        x-source:
+          kind: peers.first
+          params:
+            pool: pgs
+            project: pgtest
+      peers:
+        type: string
+        title: Member names
+        x-source:
+          kind: peers.all
+          params:
+            pool: pgs
+            project: pgtest
+      ca:
+        type: string
+        title: CA bundle
+        contentMediaType: application/x-pem-file
+        x-source:
+          kind: ca.bundle
+  install:
+    command: sh install-pgconsumer.sh
+    timeout: 10m
+  start:
+    command: sh start-pgconsumer.sh
+    service: pgconsumer
+    restart: on-failure
+  stop:
+    signal: SIGTERM
+    timeout: 10s
+    grace: 5s
+files:
+  - install-pgconsumer.sh
+  - start-pgconsumer.sh
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
