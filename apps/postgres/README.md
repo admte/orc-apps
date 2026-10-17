@@ -306,7 +306,8 @@ PostgreSQL's own log (`log_destination = 'stderr'`, prefix `%m [%p] %q%u@%d `) i
 to the same service log through `postgres-log.awk`, so a healthy node logs no warnings:
 
 - **warning (stderr)**: `ERROR`, `FATAL` and `PANIC`; a `WARNING` from the server itself
-  (no `user@db` in the prefix), and a transaction-wraparound warning from any session; and
+  (no `user@db` in the prefix), and a transaction-wraparound or `crash of another server
+  process` warning from any session; and
   the `LOG` lines that report trouble — a server process terminated by a signal, the
   restart of all sessions that follows, `not properly shut down` (crash recovery), and an
   obsolete replication slot invalidated.
@@ -316,6 +317,10 @@ to the same service log through `postgres-log.awk`, so a healthy node logs no wa
   the `FATAL`s of a routine start or stop: `the database system is starting up` / `shutting
   down` / `not yet accepting connections`, and sessions ended `due to administrator
   command` by a fast shutdown.
+- the crash recovery after the server was killed (or a restore from a capture) runs in the
+  start script's private server, before the service's own; the script logs it as
+  information, `the cluster was not shut down cleanly ...`, with the WAL replay it did. The
+  kill itself shows as the service manager's warning that the main process was killed.
 - `DETAIL`, `HINT`, `CONTEXT`, `STATEMENT`, `QUERY` and `LOCATION` lines, and the
   continuation lines of a message that spans several, go where the line they belong to went.
 - A replica that cannot reach node 1 retries every 5 s; its `could not connect to the

@@ -4,8 +4,9 @@
 # written to the one that says how much it matters:
 #
 #   stderr (warning)  ERROR, FATAL and PANIC; a WARNING from the server itself (not from a
-#                     client's session); and the LOG lines that report a crash or a lost
-#                     replication slot.
+#                     client's session), or one telling a session that the server crashed
+#                     or that the database must be vacuumed; and the LOG lines that report a
+#                     crash or a lost replication slot.
 #   stdout (info)     everything else: LOG, INFO, NOTICE, DEBUG, a WARNING sent to a client
 #                     (an ANALYZE it may not run, a COMMIT outside a transaction), and the
 #                     FATALs of a routine start or stop (connections refused while the
@@ -61,7 +62,7 @@ function classify(sev, msg, session) {
 		return "warn"
 	}
 	if (sev == "WARNING") {
-		if (msg ~ /must be vacuumed within/)
+		if (msg ~ /must be vacuumed within/ || msg ~ /because of crash of another server process/)
 			return "warn"
 		return session ? "info" : "warn"
 	}

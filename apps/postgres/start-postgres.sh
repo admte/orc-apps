@@ -417,7 +417,13 @@ start_private() {
 	: >"$BOOTSTRAP_LOG"
 	chown "$PG_OS_USER:" "$BOOTSTRAP_LOG"
 	pg_as_postgres "$PG_BIN/pg_ctl" start -w -t 3600 -s -D "$pgdata" -l "$BOOTSTRAP_LOG" \
-		-o "-c listen_addresses='' -c unix_socket_directories='$PG_SOCKET_DIR' $*"
+		-o "-c listen_addresses='' -c unix_socket_directories='$PG_SOCKET_DIR' $*" || return
+	# Crash recovery runs here, before the server the service runs, so this log is the
+	# only place it shows. Information, not a warning: a cluster restored from a capture
+	# of a running server recovers the same way.
+	if grep -q 'not properly shut down' "$BOOTSTRAP_LOG"; then
+		pg_note "the cluster was not shut down cleanly (the server was killed, the machine stopped, or it was restored from a capture); PostgreSQL replayed its WAL: $(grep -E 'redo (starts|done)' "$BOOTSTRAP_LOG" | sed 's/^.*LOG:  //' | tr '\n' ' ')"
+	fi
 }
 
 psql_local() {
