@@ -10,7 +10,9 @@
 #   stdout (info)     everything else: LOG, INFO, NOTICE, DEBUG, a WARNING sent to a client
 #                     (an ANALYZE it may not run, a COMMIT outside a transaction), and the
 #                     FATALs of a routine start or stop (connections refused while the
-#                     server starts up or shuts down, sessions ended by a fast shutdown).
+#                     server starts up or shuts down, sessions ended by a fast shutdown),
+#                     and the ERRORs of a cancelled statement (a client's cancel, the
+#                     stop signal reaching a running query, autovacuum giving way).
 #
 # DETAIL, HINT, CONTEXT, STATEMENT, QUERY and LOCATION lines, and the unprefixed lines of a
 # message that spans several, go where the line they belong to went. A replica that cannot
@@ -58,6 +60,9 @@ function classify(sev, msg, session) {
 	if (sev == "ERROR") {
 		# A replica making sure node 1 holds its slot, racing node 1 creating it.
 		if (msg ~ /^replication slot "replica_[0-9]+" already exists/)
+			return "info"
+		# A statement cancelled on purpose: nothing went wrong.
+		if (msg ~ /^canceling statement due to user request/ || msg ~ /^canceling autovacuum task/)
 			return "info"
 		return "warn"
 	}

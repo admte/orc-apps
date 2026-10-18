@@ -316,7 +316,9 @@ to the same service log through `postgres-log.awk`, so a healthy node logs no wa
   analyze it`, `there is no transaction in progress`), which is the client's to act on; and
   the `FATAL`s of a routine start or stop: `the database system is starting up` / `shutting
   down` / `not yet accepting connections`, and sessions ended `due to administrator
-  command` by a fast shutdown.
+  command` by a fast shutdown; and the `ERROR`s of a statement cancelled on purpose,
+  `canceling statement due to user request` (a client's cancel, or the stop reaching a
+  running query) and `canceling autovacuum task`.
 - the crash recovery after the server was killed (or a restore from a capture) runs in the
   start script's private server, before the service's own; the script logs it as
   information, `the cluster was not shut down cleanly ...`, with the WAL replay it did. The
