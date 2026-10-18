@@ -1,0 +1,178 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: postgres
+  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  org.opencontainers.image.description: PostgreSQL database for your apps.
+config:
+  params:
+    type: object
+    required: [db_password]
+    properties:
+      db_name:
+        type: string
+        title: Database name
+        description: Database created for your application
+        default: app
+      db_user:
+        type: string
+        title: Database username
+        description: User your application connects as; it owns the database
+        default: app
+      db_password:
+        type: string
+        title: Database password
+        description: Password for the database username; connections use TLS
+        sensitive: true
+      max_connections:
+        type: string
+        title: Max connections
+        description: Most client connections at once
+        default: "100"
+
+      # Everything below describes a deployment of more than one node, and all of it is
+      # optional: a single node needs none of it and runs as the writer with a generated
+      # server certificate. Each one can be passed by hand; `x-source` additionally lets
+      # an orchestrator that understands these kinds fill them in automatically, which is
+      # a convenience, never a requirement.
+      slot:
+        type: string
+        title: Node number
+        description: This node's number, 1-based and stable for its life. Node 1 is the writer; every other node is a replica. Defaults to 1.
+        x-source:
+          kind: pool.slot
+      pool:
+        type: string
+        title: Cluster name
+        description: Name shared by the nodes of one database; used as cluster_name in logs
+        x-source:
+          kind: pool.name
+      writer:
+        type: string
+        title: Writer address
+        description: Host name of node 1, which replicas stream from. Required on a replica.
+        x-source:
+          kind: peers.first
+      peers:
+        type: string
+        title: Nodes
+        description: Host name of every node of the database, one per line, node 1 included. On node 1 it turns on the check that no other node holds newer data before writes are taken.
+        x-source:
+          kind: peers.all
+      # The CA that issues the certificates the nodes present to each other. Supplying it
+      # is what turns replication on: it is the server's ssl_ca_file, which authenticates
+      # a replica's client certificate, and the root a replica verifies the writer against.
+      ca:
+        type: string
+        title: CA bundle
+        description: PEM chain of the CA that issued the certificates below. Required for replication.
+        contentMediaType: application/x-pem-file
+        x-source:
+          kind: ca.bundle
+      # The listener's certificate. Without one the app generates a self-signed pair on
+      # first start, which encrypts the connection but cannot be verified; supply a real
+      # one to let clients and replicas check who they are talking to.
+      server_cert:
+        type: string
+        title: Server certificate
+        description: PEM certificate the listener presents, valid for the names clients dial
+        contentMediaType: application/x-pem-file
+        x-source:
+          kind: tls.cert
+          params:
+            purpose: server_tls
+      server_key:
+        type: string
+        title: Server key
+        description: PEM private key for the server certificate
+        contentMediaType: application/x-pem-file
+        x-source:
+          kind: tls.key
+          params:
+            pair: server_cert
+      # A replica's identity towards the writer. Replication is authenticated by this
+      # certificate alone, so no replication password is shared between the nodes.
+      client_cert:
+        type: string
+        title: Replication client certificate
+        description: PEM certificate a replica presents to the writer. Required on a replica.
+        contentMediaType: application/x-pem-file
+        x-source:
+          kind: tls.cert
+          params:
+            purpose: client_mtls
+      client_key:
+        type: string
+        title: Replication client key
+        description: PEM private key for the replication client certificate
+        contentMediaType: application/x-pem-file
+        x-source:
+          kind: tls.key
+          params:
+            pair: client_cert
+  # One listener. `primary` says that a name covering the whole cluster should answer
+  # with the writer alone, so a client that dials the cluster reaches the node that takes
+  # writes; individual node names still reach replicas for reads.
+  endpoints:
+    pg:
+      port: 5432
+      serve: primary
+      # Ready only while the server takes connections and this node is one clients
+      # should reach: not while node 1 decides or copies, not while an empty node runs
+      # its stand-in, not while a replica is parked (see README, Recovery and durability).
+      probe:
+        command: sh probe-postgres.sh
+  # Packages only, from the PGDG repository. Nothing here is node identity or data, so
+  # the result is safe to snapshot into a reusable machine image: initdb, roles, and a
+  # replica's seed all belong to start.
+  # Commands are named rather than left to the start-<app> naming convention, so the
+  # package runs the same whatever repository name it is published under.
+  install:
+    command: sh install-postgres.sh
+    timeout: 15m
+  # Managed service, resolved from start-postgres.sh. The script stages the TLS material,
+  # initializes or rebuilds the cluster for this node, and execs the postmaster under the
+  # postgres account, so PostgreSQL is the service's main process.
+  start:
+    command: sh start-postgres.sh
+    service: postgres
+    restart: on-failure
+  # SIGINT is PostgreSQL's fast shutdown: sessions are disconnected, a checkpoint is
+  # written, and the postmaster exits. The grace bounds that checkpoint; a kill past it
+  # costs crash recovery on the next start, never committed data.
+  stop:
+    signal: SIGINT
+    timeout: 30s
+    grace: 120s
+  # Two roots on the App-data volume. primary/ holds the writer's cluster and is the only
+  # data captured. replica/ holds a replica's cluster, which can be as large as the
+  # writer's and so belongs on the volume too, but under standby/, which the filter
+  # keeps out of every capture: a replica's copy is the writer's data, and its restore
+  # point is an empty directory. The hook checkpoints first when enough WAL has piled up
+  # since the last checkpoint, so recovery after a restore stays short, and refuses while
+  # node 1 is still deciding or copying. The postmaster's pid file is never captured: a
+  # restored one would only be stale.
+  persist:
+    paths:
+      - /var/lib/orc-postgres/primary
+      - /var/lib/orc-postgres/replica
+      - "!standby/**"
+      - "!**/postmaster.pid"
+    hook_pre:
+      command: sh hook-pre-postgres.sh
+      timeout: 5m
+  # Packages and the node-local state; every cluster lives on the App-data volume.
+  footprint_gb: 2
+files:
+  - postgres-common.sh
+  - install-postgres.sh
+  - start-postgres.sh
+  - hook-pre-postgres.sh
+  - postgres-position.sh
+  - watch-postgres.sh
+  - postgres-log.awk
+  - probe-postgres.sh
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64

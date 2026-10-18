@@ -140,6 +140,7 @@ low-level, one-platform extract.
 | nvidia-driver | draft | NVIDIA GPU driver from Ubuntu's signed packages; reboots once if needed; linux (Ubuntu) |
 | terraform | draft | Terraform CLI from HashiCorp Releases; version-scoped install; linux only |
 | vllm | draft | vLLM inference server as a managed service; one model over an OpenAI-compatible endpoint; linux + NVIDIA GPU |
+| postgres | draft | PostgreSQL 17 as a managed service; one node is the writer, further nodes stream from it; TLS-only listener, cert-authenticated replication; linux only |
 
 ## Related repos
 
