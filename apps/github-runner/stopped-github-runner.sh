@@ -2,9 +2,10 @@
 set -eu
 
 # Post-exit hook: the listener is already gone, so GitHub will not refuse the
-# removal as busy. The registration is released on APP_STOP_REASON=terminate and
-# on nothing else — a restart or a plain stop leaves this node's runner in place,
-# because the same install starts again against the same registration.
+# removal as busy. A registration made with a personal access token is released
+# on APP_STOP_REASON=terminate and on nothing else — a restart or a plain stop
+# leaves this node's runner in place, because the same install starts again
+# against the same registration. One orc8r minted is orc8r's to remove.
 
 SERVICE_USER=${SERVICE_USER:-ghrunner}
 ATTEMPTS=${ATTEMPTS:-3}
@@ -31,6 +32,17 @@ token_value() {
 	else
 		fail "TOKEN_FILE or TOKEN is required"
 	fi
+}
+
+# The token param holds either an operator's personal access token or a
+# registration orc8r minted for this node, a JSON object. They are told apart by
+# shape: a value whose first non-blank character is `{` is the minted credential.
+is_minted() {
+	trimmed=${1#"${1%%[![:space:]]*}"}
+	case "$trimmed" in
+	'{'*) return 0 ;;
+	*) return 1 ;;
+	esac
 }
 
 github_api_path() {
@@ -80,10 +92,18 @@ if [ ! -x "$work_dir/config.sh" ]; then
 fi
 work_dir=$(CDPATH= cd -- "$work_dir" && pwd)
 
+credential=$(token_value)
+# orc8r minted this registration and removes it itself when the node ends; the
+# node holds no credential that could.
+if is_minted "$credential"; then
+	note "minted registration; orc8r removes it, nothing to deregister here reason=$reason"
+	exit 0
+fi
+
 need curl
 need python3
 [ -n "${URL:-}" ] || fail "URL is required"
-github_token=$(token_value)
+github_token=$credential
 api_path=$(github_api_path)
 
 cd "$work_dir"

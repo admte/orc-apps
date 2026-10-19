@@ -1,9 +1,10 @@
 $ErrorActionPreference = 'Stop'
 
 # Post-exit hook: the listener is already gone, so GitHub will not refuse the
-# removal as busy. The registration is released on APP_STOP_REASON=terminate and
-# on nothing else — a restart or a plain stop leaves this node's runner in place,
-# because the same install starts again against the same registration.
+# removal as busy. A registration made with a personal access token is released
+# on APP_STOP_REASON=terminate and on nothing else — a restart or a plain stop
+# leaves this node's runner in place, because the same install starts again
+# against the same registration. One orc8r minted is orc8r's to remove.
 
 $attempts = if ($env:ATTEMPTS) { [int]$env:ATTEMPTS } else { 3 }
 $retryInterval = if ($env:RETRY_INTERVAL) { [int]$env:RETRY_INTERVAL } else { 5 }
@@ -16,6 +17,13 @@ function Get-Token {
 		return $env:TOKEN.Trim()
 	}
 	throw 'TOKEN_FILE or TOKEN is required'
+}
+
+# The token param holds either an operator's personal access token or a
+# registration orc8r minted for this node, a JSON object. They are told apart by
+# shape: a value whose first non-blank character is `{` is the minted credential.
+function Test-Minted($value) {
+	return [bool]($value -and $value.TrimStart().StartsWith('{'))
 }
 
 function Get-GitHubApiPath {
@@ -49,7 +57,15 @@ if (-not (Test-Path (Join-Path $workDir 'config.cmd'))) {
 }
 $workDir = (Resolve-Path $workDir).Path
 
-$headers = @{ Accept = 'application/vnd.github+json'; Authorization = "token $(Get-Token)" }
+$credential = Get-Token
+# orc8r minted this registration and removes it itself when the node ends; the
+# node holds no credential that could.
+if (Test-Minted $credential) {
+	Write-Host "github-runner stopped: minted registration; orc8r removes it, nothing to deregister here reason=$reason"
+	exit 0
+}
+
+$headers = @{ Accept = 'application/vnd.github+json'; Authorization = "token $credential" }
 $apiPath = Get-GitHubApiPath
 
 Push-Location $workDir

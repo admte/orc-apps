@@ -1,5 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
+# Returns the token value, or nothing when none was delivered: install needs a
+# credential only to ask GitHub's downloads API, and has a public path without one.
 function Get-Token {
 	if ($env:TOKEN_FILE) {
 		return (Get-Content -Raw -LiteralPath $env:TOKEN_FILE).Trim()
@@ -7,7 +9,14 @@ function Get-Token {
 	if ($env:TOKEN) {
 		return $env:TOKEN.Trim()
 	}
-	throw 'TOKEN_FILE or TOKEN is required'
+	return ''
+}
+
+# The token param holds either an operator's personal access token or a
+# registration orc8r minted for this node, a JSON object. They are told apart by
+# shape: a value whose first non-blank character is `{` is the minted credential.
+function Test-Minted($value) {
+	return [bool]($value -and $value.TrimStart().StartsWith('{'))
 }
 
 function Get-GitHubApiPath {
@@ -36,20 +45,52 @@ function Get-RunnerArch {
 	}
 }
 
+# Selects this target's archive from GitHub's public release metadata for the
+# runner, in the shape the downloads API returns. The checksum is the asset's own
+# digest, else the one the release notes carry between BEGIN/END SHA markers, else
+# empty.
+function Select-ReleaseAsset($release, $arch) {
+	$version = $release.tag_name.TrimStart('v')
+	$name = "actions-runner-win-$arch-$version.zip"
+	$asset = $release.assets | Where-Object { $_.name -eq $name } | Select-Object -First 1
+	if (-not $asset) { return $null }
+	$checksum = ''
+	if ($asset.digest -and $asset.digest.StartsWith('sha256:')) {
+		$checksum = $asset.digest.Substring('sha256:'.Length)
+	} elseif ($release.body -match "<!-- BEGIN SHA win-$arch -->\s*([0-9a-fA-F]{64})\s*<!-- END SHA") {
+		$checksum = $Matches[1]
+	}
+	return [pscustomobject]@{
+		filename        = $name
+		download_url    = $asset.browser_download_url
+		sha256_checksum = $checksum
+	}
+}
+
 $githubToken = Get-Token
-$apiPath = Get-GitHubApiPath
 $workDir = 'github-runner'
 
 New-Item -ItemType Directory -Force -Path $workDir | Out-Null
 
-# Ask GitHub which runner build its service currently wants for this
-# registration target; the runner self-updates afterward, so no pinning.
-$downloads = Invoke-RestMethod -Headers @{
-	Accept        = 'application/vnd.github+json'
-	Authorization = "token $githubToken"
-} -Uri "https://api.github.com/$apiPath/actions/runners/downloads"
+# The runner self-updates afterward, so no version pinning on either path.
 $arch = Get-RunnerArch
-$selected = $downloads | Where-Object { $_.os -eq 'win' -and $_.architecture -eq $arch } | Select-Object -First 1
+if ($githubToken -and -not (Test-Minted $githubToken)) {
+	# A personal access token: ask GitHub which runner build its service currently
+	# wants for this registration target.
+	$apiPath = Get-GitHubApiPath
+	$downloads = Invoke-RestMethod -Headers @{
+		Accept        = 'application/vnd.github+json'
+		Authorization = "token $githubToken"
+	} -Uri "https://api.github.com/$apiPath/actions/runners/downloads"
+	$selected = $downloads | Where-Object { $_.os -eq 'win' -and $_.architecture -eq $arch } | Select-Object -First 1
+} else {
+	# A minted registration, or none delivered yet: install holds no API
+	# credential, so it takes the latest release from GitHub's public metadata.
+	Write-Host 'github-runner install: no API token; using the latest public runner release'
+	$release = Invoke-RestMethod -Headers @{ Accept = 'application/vnd.github+json' } `
+		-Uri 'https://api.github.com/repos/actions/runner/releases/latest'
+	$selected = Select-ReleaseAsset $release $arch
+}
 if (-not $selected) { throw "no runner download for win/$arch" }
 $archive = $selected.filename
 $tmp = New-Item -ItemType Directory -Force -Path (Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString()))

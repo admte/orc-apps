@@ -1,10 +1,10 @@
 $ErrorActionPreference = 'Stop'
 
-# Quiesce hook: the listener is still running and may be mid-job. Take the pool
-# label off the runner so the queue stops routing work here, then wait for the
-# worker that is already running to finish, then exit 0. Stopping the listener is
-# the runtime's next step; deregistering is stopped-github-runner.ps1's, and only
-# when the node is going away for good.
+# Quiesce hook: the listener is still running and may be mid-job. With a personal
+# access token, take the pool label off the runner so the queue stops routing work
+# here; in either mode, wait for the worker that is already running to finish,
+# then exit 0. Stopping the listener is the runtime's next step; deregistering is
+# stopped-github-runner.ps1's, and only when the node is going away for good.
 
 # Kept under the 1h stop.timeout so the wait ends with a message of its own
 # rather than being cut off mid-poll.
@@ -19,6 +19,13 @@ function Get-Token {
 		return $env:TOKEN.Trim()
 	}
 	throw 'TOKEN_FILE or TOKEN is required'
+}
+
+# The token param holds either an operator's personal access token or a
+# registration orc8r minted for this node, a JSON object. They are told apart by
+# shape: a value whose first non-blank character is `{` is the minted credential.
+function Test-Minted($value) {
+	return [bool]($value -and $value.TrimStart().StartsWith('{'))
 }
 
 function Get-GitHubApiPath {
@@ -78,12 +85,18 @@ $workDir = (Resolve-Path $workDir).Path
 
 $runnerName = $env:COMPUTERNAME
 $label = $env:POOL
-$headers = @{ Accept = 'application/vnd.github+json'; Authorization = "token $(Get-Token)" }
-$apiPath = Get-GitHubApiPath
+$credential = Get-Token
 
-if (-not $label) {
+# A minted registration holds no API credential and set its labels when it
+# registered, so there is no label to take off: the service stop, once the job
+# below has finished, is what stops the listener taking another.
+if (Test-Minted $credential) {
+	Write-Host "github-runner stop: minted registration; no label to remove, relying on the service stop name=$runnerName"
+} elseif (-not $label) {
 	Write-Host "github-runner stop: no pool label to remove; relying on the service stop name=$runnerName"
 } else {
+	$headers = @{ Accept = 'application/vnd.github+json'; Authorization = "token $credential" }
+	$apiPath = Get-GitHubApiPath
 	$runnerId = Find-RunnerId $apiPath $headers $runnerName
 	if (-not $runnerId) {
 		Write-Host "github-runner stop: runner is not registered; nothing to unlabel name=$runnerName"

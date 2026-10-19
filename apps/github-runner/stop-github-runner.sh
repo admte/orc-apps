@@ -1,11 +1,11 @@
 #!/bin/sh
 set -eu
 
-# Quiesce hook: the listener is still running and may be mid-job. Take the pool
-# label off the runner so the queue stops routing work here, then wait for the
-# worker that is already running to finish, then exit 0. Stopping the listener is
-# the runtime's next step; deregistering is stopped-github-runner.sh's, and only
-# when the node is going away for good.
+# Quiesce hook: the listener is still running and may be mid-job. With a personal
+# access token, take the pool label off the runner so the queue stops routing work
+# here; in either mode, wait for the worker that is already running to finish,
+# then exit 0. Stopping the listener is the runtime's next step; deregistering is
+# stopped-github-runner.sh's, and only when the node is going away for good.
 
 # Kept under the 1h stop.timeout so the wait ends with a message of its own
 # rather than being cut off mid-poll.
@@ -33,6 +33,17 @@ token_value() {
 	else
 		fail "TOKEN_FILE or TOKEN is required"
 	fi
+}
+
+# The token param holds either an operator's personal access token or a
+# registration orc8r minted for this node, a JSON object. They are told apart by
+# shape: a value whose first non-blank character is `{` is the minted credential.
+is_minted() {
+	trimmed=${1#"${1%%[![:space:]]*}"}
+	case "$trimmed" in
+	'{'*) return 0 ;;
+	*) return 1 ;;
+	esac
 }
 
 github_api_path() {
@@ -112,15 +123,21 @@ if [ ! -x "$work_dir/config.sh" ]; then
 fi
 work_dir=$(CDPATH= cd -- "$work_dir" && pwd)
 
-[ -n "${URL:-}" ] || fail "URL is required"
-github_token=$(token_value)
-api_path=$(github_api_path)
 runner_name=$(hostname)
 label=${POOL:-}
+credential=$(token_value)
 
-if [ -z "$label" ]; then
+# A minted registration holds no API credential and set its labels when it
+# registered, so there is no label to take off: the runtime's SIGINT, sent once the
+# job below has finished, is what stops the listener taking another.
+if is_minted "$credential"; then
+	note "minted registration; no label to remove, relying on the stop signal name=$runner_name"
+elif [ -z "$label" ]; then
 	note "no pool label to remove; relying on the stop signal name=$runner_name"
 else
+	[ -n "${URL:-}" ] || fail "URL is required"
+	github_token=$credential
+	api_path=$(github_api_path)
 	runner_id=$(find_runner_id) || fail "failed to list runners name=$runner_name"
 	if [ -z "$runner_id" ]; then
 		note "runner is not registered; nothing to unlabel name=$runner_name"

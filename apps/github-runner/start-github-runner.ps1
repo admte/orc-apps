@@ -19,6 +19,50 @@ function Get-Token {
 	throw 'TOKEN_FILE or TOKEN is required'
 }
 
+# The token param holds either an operator's personal access token or a
+# registration orc8r minted for this node, a JSON object. They are told apart by
+# shape: a value whose first non-blank character is `{` is the minted credential.
+function Test-Minted($value) {
+	return [bool]($value -and $value.TrimStart().StartsWith('{'))
+}
+
+# Reads a minted credential and returns its url, token, name and labels (joined by
+# commas). Only the persistent mode is understood; any other mode stops here with
+# the message orc8r and an operator look for.
+function Get-MintedRegistration($value) {
+	try {
+		$cred = $value | ConvertFrom-Json
+	} catch {
+		throw "github-runner start: the minted credential is not valid JSON: $($_.Exception.Message)"
+	}
+	if ($cred.mode -ne 'persistent') {
+		throw "github-runner: credential mode $($cred.mode) is not supported by this version"
+	}
+	foreach ($key in 'url', 'token', 'name') {
+		if (-not ($cred.$key -is [string]) -or -not $cred.$key) {
+			throw "github-runner start: the minted credential has no $key"
+		}
+	}
+	$labels = @()
+	if ($null -ne $cred.labels) {
+		if (-not ($cred.labels -is [array])) {
+			throw 'github-runner start: the minted credential labels must be a list of names without commas'
+		}
+		foreach ($label in @($cred.labels)) {
+			if (-not ($label -is [string]) -or -not $label -or $label.Contains(',')) {
+				throw 'github-runner start: the minted credential labels must be a list of names without commas'
+			}
+			$labels += $label
+		}
+	}
+	return [pscustomobject]@{
+		url    = $cred.url
+		token  = $cred.token
+		name   = $cred.name
+		labels = $labels -join ','
+	}
+}
+
 function Get-GitHubApiPath {
 	if (-not $env:URL -or -not $env:URL.StartsWith('https://github.com/')) {
 		throw 'URL must start with https://github.com/'
@@ -67,11 +111,37 @@ $labels = if ($env:POOL) { $env:POOL } else { '' }
 # has none yet — a fresh install, or the first boot of a clone whose baked image
 # carried the unpacked runner but deliberately no identity — so register. Present
 # means an ordinary service restart, and config.cmd refuses an already-configured
-# directory, so registration is skipped and the same identity is reused. The
-# stopped hook's `config.cmd remove` deletes `.runner`, which is what makes a
-# terminated-then-restarted install register again rather than start unconfigured.
+# directory, so registration is skipped and the same identity is reused. With a
+# personal access token, the stopped hook's `config.cmd remove` deletes `.runner`,
+# which is what makes a terminated-then-restarted install register again rather
+# than start unconfigured.
+#
+# A registration orc8r minted carries its own url, runner name and labels, and the
+# token in it is already a registration token, so it goes to config.cmd as is; the
+# operator's URL, the host name and POOL are not used for it. An absent token is
+# not fatal here: a node with `.runner` starts without one, and the PAT
+# registration below fails on it by name.
+try { $credential = Get-Token } catch { $credential = '' }
+$minted = Test-Minted $credential
+
 if (Test-Path (Join-Path $workDir '.runner')) {
 	Write-Host "github-runner start: already registered; reusing this node's identity name=$runnerName dir=$workDir"
+} elseif ($minted) {
+	$registration = Get-MintedRegistration $credential
+	$runnerName = $registration.name
+	$labels = $registration.labels
+
+	$configArgs = @('--unattended', '--url', $registration.url, '--token', $registration.token, '--name', $runnerName)
+	if ($labels) {
+		$configArgs += @('--labels', $labels)
+	}
+	$configArgs += '--replace'
+
+	Write-Host "github-runner start: registering with the minted registration name=$runnerName labels=$labels"
+	& .\config.cmd @configArgs
+	if ($LASTEXITCODE -ne 0) {
+		throw "github-runner start: config.cmd failed with exit code $LASTEXITCODE"
+	}
 } else {
 	# A registration token is short-lived, so it is minted at the moment it is
 	# used and never persisted.
@@ -99,10 +169,14 @@ if (Test-Path (Join-Path $workDir '.runner')) {
 # outlives every stop reason but `terminate` — so a drained node would otherwise
 # come back online carrying only its default labels, and `runs-on: <pool>` would
 # never match it again: healthy-looking, and silently never given another job.
-# POST .../labels adds without replacing, so this runs on both paths above,
+# POST .../labels adds without replacing, so this runs on both PAT paths above,
 # whether config.cmd just passed --labels or the registration was already there.
 # It is never fatal: a runner with no label still beats a node that will not start.
-if (-not $labels) {
+# A minted registration set its labels at registration and holds no API
+# credential, so there is nothing to restore: stop leaves them alone too.
+if ($minted) {
+	Write-Host "github-runner start: labels were set at registration; no label upkeep name=$runnerName"
+} elseif (-not $labels) {
 	Write-Host "github-runner start: no pool label to ensure name=$runnerName"
 } else {
 	try {
