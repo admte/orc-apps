@@ -120,14 +120,17 @@ transient API error; the listener is already gone by then, so GitHub does not re
 removal as busy. On every other reason (`restart`, `stop`, `shutdown`, `exit`) it exits 0
 immediately and leaves the registration intact, because the same install starts again against
 it and start reuses it on sight of `.runner`. That is the personal-access-token path: a minted
-registration is orc8r's to remove, so on `terminate` the hook logs that and exits 0.
+registration is orc8r's to remove, so on `terminate` the hook only deletes `.runner`,
+`.credentials`, and `.credentials_rsaparams` locally, the way `config.sh remove` would. With no
+credential delivered at all, `stop` skips the label step and still waits for the job, and
+`stopped` exits 0.
 
-With a personal access token the three hooks meet at that one file. `config.sh remove` deletes
+The three hooks meet at that one file. `config.sh remove` (or the minted path's delete) removes
 `.runner` and `.credentials`, so a `terminate` that is somehow followed by another start finds
 no identity and registers fresh rather than starting an unconfigured listener; every other stop
-reason leaves `.runner` in place, and start reuses it. Labels ride alongside: `stop` removes
-the pool label and `start` puts it back, whichever branch it took, so the identity and the
-label are both whole again by the time the listener comes up.
+reason leaves `.runner` in place, and start reuses it. With a PAT, labels ride alongside:
+`stop` removes the pool label and `start` puts it back, whichever branch it took, so the
+identity and the label are both whole again by the time the listener comes up.
 
 ## Build + Push
 

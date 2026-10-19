@@ -125,12 +125,16 @@ work_dir=$(CDPATH= cd -- "$work_dir" && pwd)
 
 runner_name=$(hostname)
 label=${POOL:-}
-credential=$(token_value)
+# Absent is not fatal: without a credential there is no label to take off, and
+# the wait for the current job below still holds.
+credential=$(token_value 2>/dev/null) || credential=
 
 # A minted registration holds no API credential and set its labels when it
 # registered, so there is no label to take off: the runtime's SIGINT, sent once the
 # job below has finished, is what stops the listener taking another.
-if is_minted "$credential"; then
+if [ -z "$credential" ]; then
+	note "no credential available; skipping the label step name=$runner_name"
+elif is_minted "$credential"; then
 	note "minted registration; no label to remove, relying on the stop signal name=$runner_name"
 elif [ -z "$label" ]; then
 	note "no pool label to remove; relying on the stop signal name=$runner_name"

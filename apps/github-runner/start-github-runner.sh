@@ -180,6 +180,19 @@ ensure_pool_label() {
 # setpriv, never su or runuser: those start a new session, which is what puts an
 # app outside the process group the runtime signals. The account has no home
 # directory, so HOME points at the runner directory it owns.
+# Prints the name a configured directory registered under, from the agentName in
+# `.runner` (which config.sh writes with a UTF-8 BOM), or nothing if unreadable.
+registered_name() {
+	python3 -c '
+import json
+try:
+    with open(".runner", encoding="utf-8-sig") as f:
+        print(json.load(f).get("agentName") or "")
+except Exception:
+    pass
+' 2>/dev/null || true
+}
+
 as_service_user() {
 	setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_USER" --init-groups \
 		env HOME="$work_dir" "$@"
@@ -224,6 +237,8 @@ else
 fi
 
 if [ -f .runner ]; then
+	registered=$(registered_name)
+	runner_name=${registered:-$runner_name}
 	note "already registered; reusing this node's identity name=$runner_name dir=$work_dir"
 elif [ "$minted" = yes ]; then
 	registration=$(printf '%s' "$credential" | minted_registration) || exit 1

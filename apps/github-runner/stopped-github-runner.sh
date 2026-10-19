@@ -92,11 +92,20 @@ if [ ! -x "$work_dir/config.sh" ]; then
 fi
 work_dir=$(CDPATH= cd -- "$work_dir" && pwd)
 
-credential=$(token_value)
+credential=$(token_value 2>/dev/null) || credential=
+if [ -z "$credential" ]; then
+	note "no credential available; nothing to deregister reason=$reason"
+	exit 0
+fi
+
 # orc8r minted this registration and removes it itself when the node ends; the
-# node holds no credential that could.
+# node holds no credential that could. The identity files go, so a node that
+# somehow starts again registers fresh rather than running a removed identity —
+# what `config.sh remove` does on the PAT path.
 if is_minted "$credential"; then
 	note "minted registration; orc8r removes it, nothing to deregister here reason=$reason"
+	rm -f "$work_dir/.runner" "$work_dir/.credentials" "$work_dir/.credentials_rsaparams"
+	note "removed this node's runner identity files dir=$work_dir"
 	exit 0
 fi
 

@@ -85,12 +85,16 @@ $workDir = (Resolve-Path $workDir).Path
 
 $runnerName = $env:COMPUTERNAME
 $label = $env:POOL
-$credential = Get-Token
+# Absent is not fatal: without a credential there is no label to take off, and
+# the wait for the current job below still holds.
+try { $credential = Get-Token } catch { $credential = '' }
 
 # A minted registration holds no API credential and set its labels when it
 # registered, so there is no label to take off: the service stop, once the job
 # below has finished, is what stops the listener taking another.
-if (Test-Minted $credential) {
+if (-not $credential) {
+	Write-Host "github-runner stop: no credential available; skipping the label step name=$runnerName"
+} elseif (Test-Minted $credential) {
 	Write-Host "github-runner stop: minted registration; no label to remove, relying on the service stop name=$runnerName"
 } elseif (-not $label) {
 	Write-Host "github-runner stop: no pool label to remove; relying on the service stop name=$runnerName"
