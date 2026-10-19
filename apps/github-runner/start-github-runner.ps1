@@ -95,6 +95,17 @@ function Find-RunnerId($apiPath, $headers, $name) {
 	return $null
 }
 
+# Returns the name a configured directory registered under, from the agentName in
+# `.runner` (which config.cmd writes with a UTF-8 BOM), or nothing if unreadable.
+function Get-RegisteredName($runnerFile) {
+	try {
+		$text = [System.IO.File]::ReadAllText($runnerFile).TrimStart([char]0xFEFF)
+		return ($text | ConvertFrom-Json).agentName
+	} catch {
+		return $null
+	}
+}
+
 $workDir = 'github-runner'
 if (-not (Test-Path (Join-Path $workDir 'config.cmd'))) {
 	throw "github-runner start: no runner install found; install must run first dir=$workDir"
@@ -125,6 +136,8 @@ try { $credential = Get-Token } catch { $credential = '' }
 $minted = Test-Minted $credential
 
 if (Test-Path (Join-Path $workDir '.runner')) {
+	$registered = Get-RegisteredName (Join-Path $workDir '.runner')
+	if ($registered) { $runnerName = $registered }
 	Write-Host "github-runner start: already registered; reusing this node's identity name=$runnerName dir=$workDir"
 } elseif ($minted) {
 	$registration = Get-MintedRegistration $credential

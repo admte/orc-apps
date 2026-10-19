@@ -57,11 +57,22 @@ if (-not (Test-Path (Join-Path $workDir 'config.cmd'))) {
 }
 $workDir = (Resolve-Path $workDir).Path
 
-$credential = Get-Token
+try { $credential = Get-Token } catch { $credential = '' }
+if (-not $credential) {
+	Write-Host "github-runner stopped: no credential available; nothing to deregister reason=$reason"
+	exit 0
+}
+
 # orc8r minted this registration and removes it itself when the node ends; the
-# node holds no credential that could.
+# node holds no credential that could. The identity files go, so a node that
+# somehow starts again registers fresh rather than running a removed identity —
+# what `config.cmd remove` does on the PAT path.
 if (Test-Minted $credential) {
 	Write-Host "github-runner stopped: minted registration; orc8r removes it, nothing to deregister here reason=$reason"
+	foreach ($file in '.runner', '.credentials', '.credentials_rsaparams') {
+		Remove-Item -Force -LiteralPath (Join-Path $workDir $file) -ErrorAction SilentlyContinue
+	}
+	Write-Host "github-runner stopped: removed this node's runner identity files dir=$workDir"
 	exit 0
 }
 
