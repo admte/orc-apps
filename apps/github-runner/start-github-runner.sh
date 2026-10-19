@@ -39,6 +39,53 @@ token_value() {
 	fi
 }
 
+# The token param holds either an operator's personal access token or a
+# registration orc8r minted for this node, a JSON object. They are told apart by
+# shape: a value whose first non-blank character is `{` is the minted credential.
+is_minted() {
+	trimmed=${1#"${1%%[![:space:]]*}"}
+	case "$trimmed" in
+	'{'*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+# Reads a minted credential from stdin and prints its url, token, name and labels
+# (joined by commas), one per line. Only the persistent mode is understood; any
+# other mode stops here with the message orc8r and an operator look for.
+minted_registration() {
+	python3 -c '
+import json, sys
+def die(message):
+    print(message, file=sys.stderr)
+    sys.exit(1)
+try:
+    cred = json.load(sys.stdin)
+except ValueError as err:
+    die("github-runner start: the minted credential is not valid JSON: %s" % err)
+if not isinstance(cred, dict):
+    die("github-runner start: the minted credential is not a JSON object")
+mode = cred.get("mode")
+if mode != "persistent":
+    die("github-runner: credential mode %s is not supported by this version" % mode)
+fields = []
+for key in ("url", "token", "name"):
+    value = cred.get(key)
+    if not isinstance(value, str) or not value:
+        die("github-runner start: the minted credential has no %s" % key)
+    fields.append(value)
+labels = cred.get("labels") or []
+if not isinstance(labels, list) or not all(isinstance(l, str) and l for l in labels):
+    die("github-runner start: the minted credential labels must be a list of names")
+if any("," in l for l in labels):
+    die("github-runner start: a minted credential label contains a comma")
+fields.append(",".join(labels))
+if any("\n" in f or "\r" in f for f in fields):
+    die("github-runner start: a minted credential field contains a line break")
+print("\n".join(fields))
+'
+}
+
 github_api_path() {
 	url=${URL:-}
 	case "$url" in
@@ -159,11 +206,40 @@ labels=${POOL:-}
 # has none yet — a fresh install, or the first boot of a clone whose baked image
 # carried the unpacked runner but deliberately no identity — so register. Present
 # means an ordinary service restart, and config.sh refuses an already-configured
-# directory, so registration is skipped and the same identity is reused. The
-# stopped hook's `config.sh remove` deletes `.runner`, which is what makes a
-# terminated-then-restarted install register again rather than start unconfigured.
+# directory, so registration is skipped and the same identity is reused. With a
+# personal access token, the stopped hook's `config.sh remove` deletes `.runner`,
+# which is what makes a terminated-then-restarted install register again rather
+# than start unconfigured.
+#
+# A registration orc8r minted carries its own url, runner name and labels, and
+# the token in it is already a registration token, so it goes to config.sh as is;
+# the operator's URL, the host name and POOL are not used for it. An absent token
+# is not fatal here: a node with `.runner` starts without one, and the PAT
+# registration below fails on it by name.
+credential=$(token_value 2>/dev/null) || credential=
+if is_minted "$credential"; then
+	minted=yes
+else
+	minted=no
+fi
+
 if [ -f .runner ]; then
 	note "already registered; reusing this node's identity name=$runner_name dir=$work_dir"
+elif [ "$minted" = yes ]; then
+	registration=$(printf '%s' "$credential" | minted_registration) || exit 1
+	minted_url=$(printf '%s\n' "$registration" | sed -n 1p)
+	minted_token=$(printf '%s\n' "$registration" | sed -n 2p)
+	runner_name=$(printf '%s\n' "$registration" | sed -n 3p)
+	labels=$(printf '%s\n' "$registration" | sed -n 4p)
+
+	set -- --unattended --url "$minted_url" --token "$minted_token" --name "$runner_name"
+	if [ -n "$labels" ]; then
+		set -- "$@" --labels "$labels"
+	fi
+	set -- "$@" --replace
+
+	note "registering with the minted registration name=$runner_name labels=$labels user=$SERVICE_USER"
+	as_service_user ./config.sh "$@"
 else
 	[ -n "${URL:-}" ] || fail "URL is required"
 	github_token=$(token_value)
@@ -188,9 +264,13 @@ else
 	as_service_user ./config.sh "$@"
 fi
 
-# Runs on both paths, and never fatally: the subshell contains a hard failure
-# from anything inside, so the listener starts either way.
-if [ -z "$labels" ]; then
+# Runs on both PAT paths, and never fatally: the subshell contains a hard failure
+# from anything inside, so the listener starts either way. A minted registration
+# set its labels at registration and holds no API credential, so there is nothing
+# to restore: stop leaves them alone too.
+if [ "$minted" = yes ]; then
+	note "labels were set at registration; no label upkeep name=$runner_name"
+elif [ -z "$labels" ]; then
 	note "no pool label to ensure name=$runner_name"
 else
 	(ensure_pool_label) ||

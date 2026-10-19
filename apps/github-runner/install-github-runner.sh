@@ -39,14 +39,57 @@ for entry in json.load(sys.stdin):
 ' "$1" "$2"
 }
 
+# Prints the token value, or nothing when none was delivered: install needs a
+# credential only to ask GitHub's downloads API, and has a public path without one.
 token_value() {
 	if [ -n "${TOKEN_FILE:-}" ]; then
 		tr -d '\r\n' <"$TOKEN_FILE"
 	elif [ -n "${TOKEN:-}" ]; then
 		printf '%s' "$TOKEN"
-	else
-		fail "TOKEN_FILE or TOKEN is required"
 	fi
+}
+
+# The token param holds either an operator's personal access token or a
+# registration orc8r minted for this node, a JSON object. They are told apart by
+# shape: a value whose first non-blank character is `{` is the minted credential.
+is_minted() {
+	trimmed=${1#"${1%%[![:space:]]*}"}
+	case "$trimmed" in
+	'{'*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+# Selects this target's archive from GitHub's public release metadata for the
+# runner: prints "download_url filename sha256". The checksum is the asset's own
+# digest, else the one the release notes carry between BEGIN/END SHA markers, else
+# empty.
+select_release_asset() {
+	python3 -c '
+import json, re, sys
+target_os, target_arch = sys.argv[1], sys.argv[2]
+release = json.load(sys.stdin)
+version = release.get("tag_name", "").lstrip("v")
+ext = "zip" if target_os == "win" else "tar.gz"
+name = "actions-runner-%s-%s-%s.%s" % (target_os, target_arch, version, ext)
+for asset in release.get("assets", []):
+    if asset.get("name") != name:
+        continue
+    checksum = ""
+    digest = asset.get("digest") or ""
+    if digest.startswith("sha256:"):
+        checksum = digest[len("sha256:"):]
+    else:
+        marker = re.search(
+            r"<!-- BEGIN SHA %s-%s -->\s*([0-9a-fA-F]{64})\s*<!-- END SHA" % (re.escape(target_os), re.escape(target_arch)),
+            release.get("body") or "")
+        if marker:
+            checksum = marker.group(1)
+    print(asset.get("browser_download_url", ""))
+    print(name)
+    print(checksum.lower())
+    break
+' "$1" "$2"
 }
 
 github_api_path() {
@@ -91,9 +134,7 @@ need python3
 need setpriv
 need tar
 
-[ -n "${URL:-}" ] || fail "URL is required"
 github_token=$(token_value)
-api_path=$(github_api_path)
 work_dir=github-runner
 
 [ "$(id -u)" -eq 0 ] || fail "must run as root"
@@ -102,15 +143,28 @@ ensure_service_user
 mkdir -p "$work_dir"
 work_dir=$(CDPATH= cd -- "$work_dir" && pwd)
 
-# Ask GitHub which runner build its service currently wants for this
-# registration target (authenticated: 5000 req/h vs 60 unauthenticated).
-# The runner self-updates afterward, so no version pinning here.
-downloads_json=$(curl -fsSL \
-	-H "Accept: application/vnd.github+json" \
-	-H "Authorization: token $github_token" \
-	"https://api.github.com/$api_path/actions/runners/downloads") ||
-	fail "failed to list runner downloads"
-selected=$(printf '%s' "$downloads_json" | select_download "$(runner_os)" "$(runner_arch)")
+# The runner self-updates afterward, so no version pinning on either path.
+if [ -n "$github_token" ] && ! is_minted "$github_token"; then
+	# A personal access token: ask GitHub which runner build its service currently
+	# wants for this registration target (authenticated: 5000 req/h vs 60).
+	[ -n "${URL:-}" ] || fail "URL is required"
+	api_path=$(github_api_path)
+	downloads_json=$(curl -fsSL \
+		-H "Accept: application/vnd.github+json" \
+		-H "Authorization: token $github_token" \
+		"https://api.github.com/$api_path/actions/runners/downloads") ||
+		fail "failed to list runner downloads"
+	selected=$(printf '%s' "$downloads_json" | select_download "$(runner_os)" "$(runner_arch)")
+else
+	# A minted registration, or none delivered yet: install holds no API
+	# credential, so it takes the latest release from GitHub's public metadata.
+	echo "github-runner install: no API token; using the latest public runner release" >&2
+	release_json=$(curl -fsSL \
+		-H "Accept: application/vnd.github+json" \
+		"https://api.github.com/repos/actions/runner/releases/latest") ||
+		fail "failed to read the latest runner release"
+	selected=$(printf '%s' "$release_json" | select_release_asset "$(runner_os)" "$(runner_arch)")
+fi
 url=$(printf '%s\n' "$selected" | sed -n 1p)
 archive=$(printf '%s\n' "$selected" | sed -n 2p)
 checksum=$(printf '%s\n' "$selected" | sed -n 3p)

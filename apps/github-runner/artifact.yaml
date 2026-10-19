@@ -14,11 +14,22 @@ config:
         title: Repository URL
         description: GitHub repository or organization URL to register the runner with
         placeholder: https://github.com/org/repo
+      # Either a personal access token the operator typed, or — when left empty —
+      # a registration orc8r mints from the project's Source Control connection,
+      # delivered as a JSON object in the same file. The scripts tell them apart
+      # by shape. `runtime` because stop and stopped read a token after start.
       token:
         type: string
-        title: GitHub Token
-        description: GitHub token used to request runner registration and removal tokens
+        title: GitHub token
+        description: >-
+          Leave empty to use this project's Source Control connection. Otherwise a
+          token that can register runners for the repository.
         sensitive: true
+        lifetime: runtime
+        x-source:
+          kind: github.runner
+          params:
+            url: url
       pool:
         type: string
         title: Runner label
@@ -47,7 +58,8 @@ config:
     signal: SIGINT
     timeout: 1h
     grace: 30s
-  # Releases the GitHub registration, and only when the node is ending for good.
+  # Releases a registration made with a personal access token, and only when the
+  # node is ending for good. orc8r removes a registration it minted itself.
   stopped:
     timeout: 120s
 files:
