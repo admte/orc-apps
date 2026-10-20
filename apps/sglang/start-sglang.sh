@@ -12,7 +12,7 @@ fail() {
 }
 
 note() {
-	echo "sglang start: $*" >&2
+	echo "sglang start: $*"
 }
 
 need() {
@@ -136,7 +136,7 @@ if [ -n "$hf_token" ]; then
 		unset HF_TOKEN
 		hf_token=''
 	elif [ -n "$hf_token" ]; then
-		note "warning: the Hugging Face CLI is missing from the install, so the token has to be passed to the server itself"
+		echo "sglang start: warning: the Hugging Face CLI is missing from the install, so the token has to be passed to the server itself" >&2
 	fi
 fi
 

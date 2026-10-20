@@ -75,6 +75,25 @@ client library works against this the same way, with its base URL set to
 `http://<pool-address>:30000/v1` and any value as the API key — none is
 checked, because none is configured.
 
+From outside the project, go through the endpoint's access host — the pool's
+**Endpoints** tab shows it. The server signs the caller in before anything
+reaches the node, and an API key in the `Authorization` header is what an
+OpenAI client sends anyway, so your account's API key goes where the client
+expects its API key:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="https://<access-host>/v1", api_key="<your API key>")
+client.chat.completions.create(
+    model="Qwen/Qwen2.5-7B-Instruct-AWQ",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+```
+
+Streaming works through it. Expect about a second more before the first token
+than from inside the project.
+
 ## Versioning
 
 `config.versions` reads the project's GitHub releases, the same source
@@ -126,13 +145,17 @@ Uninstalling one version leaves it; uninstalling the last one removes it.
   runs as, and points `/opt/sglang/current` at it. It decides nothing about this
   node: no model, no port. A pool bake runs this phase alone and snapshots the
   disk, so anything node-specific would be shared by every clone. An interrupted
-  install cleans up after itself rather than leaving a half-built tree.
+  install cleans up after itself rather than leaving a half-built tree, and an
+  install run again over a finished one completes it in place, so a server
+  running from that tree keeps its files.
 - **start** counts the GPUs, fetches a gated model if a token was given, and
   execs `python -m sglang.launch_server` as the `sglang` account. It uses the
   version it was installed as, falling back to `current` — so the package also
   starts by hand, with no orchestrator to set `APP_VERSION`. It is a
   runtime-managed service, so it survives an agent restart, and
-  `restart: on-failure` brings it back if the server itself dies.
+  `restart: on-failure` brings it back if the server itself dies. A server that
+  fails again within seconds of every start is left stopped rather than retried
+  for ever; the node log has the reason.
 - **stop** is the default `SIGTERM` with a 60-second grace, because unloading a
   large model off the GPUs takes longer than the default ten seconds. There is
   no stop command: requests here last seconds, so there is nothing to drain.
@@ -142,9 +165,16 @@ Uninstalling one version leaves it; uninstalling the last one removes it.
 
 ## Requirements
 
-- **An NVIDIA GPU**, and the driver for it. The install phase warns when
+- **An NVIDIA GPU**, and a driver new enough for the CUDA the chosen release is
+  built with. The app does not install the driver: it is the node's, it needs a
+  reboot, and on a machine with Secure Boot it must be a signed build (on
+  Ubuntu, `ubuntu-drivers install` picks one). The install phase warns when
   `nvidia-smi` is missing; the start phase refuses outright, because a node
   without a GPU can never serve.
+- **A C compiler and the Python headers**, because the server compiles kernels
+  as it starts: Triton builds a small launcher in C. Install adds `gcc` and the
+  Python development package when they are missing, through the same package
+  managers as below.
 - **Linux on x86-64 or aarch64.** SGLang publishes manylinux wheels for both.
 - **Root**, for every phase, plus `useradd` and `setpriv` (util-linux 2.31 or
   newer, for `--init-groups`). Install checks for `setpriv` so a bake cannot
@@ -156,9 +186,18 @@ Uninstalling one version leaves it; uninstalling the last one removes it.
   seeds pip. Install fetches it through apt-get, dnf, yum, zypper or apk, the
   same way `gcloud` fetches python3 and `aws`, `terraform` and `vault` fetch
   `unzip`. A fresh node needs no preparation.
-- **Outbound HTTPS** to PyPI at install, and to `huggingface.co` at first start.
-- **Disk.** The wheel set and its CUDA payload are several gigabytes; the weights
-  are as large as the model.
+- **Outbound HTTPS** to PyPI and `flashinfer.ai` at install, and to
+  `huggingface.co` at first start.
+- **Disk.** The wheel set and its CUDA payload are several gigabytes,
+  FlashInfer's prebuilt kernels about 1.2 GB more; the weights are as large as
+  the model.
+
+FlashInfer's kernels are installed prebuilt, for the exact FlashInfer and CUDA
+versions the release resolved, rather than compiled on the node at first start.
+Compiling needs a CUDA toolkit whose compiler matches the headers torch pins,
+and the compiler pip resolves on its own does not: a 13.4 `nvcc` against the
+13.0 headers refuses to build, and the engine dies after the weights have
+downloaded.
 
 ## Limitations
 

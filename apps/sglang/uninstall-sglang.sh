@@ -9,7 +9,7 @@ set -eu
 # running as it, and a stray system account costs nothing.
 
 note() {
-	echo "sglang uninstall: $*" >&2
+	echo "sglang uninstall: $*"
 }
 
 fail() {
