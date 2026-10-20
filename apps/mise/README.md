@@ -6,6 +6,8 @@ Version-scoped install of mise.
 mise/
   artifact.yaml
   install-mise.sh     uninstall-mise.sh
+  install-mise.ps1    uninstall-mise.ps1
+  vcruntime140.dll    vcruntime140_1.dll
 ```
 
 No parameters. mise reads its tool versions from the project it is run in.
@@ -24,7 +26,10 @@ which matters because `mise-v<version>-linux-x64` is a prefix of its `-musl` sib
 of every archive of the same build.
 
 The binary goes to `/opt/mise/<version>`, with `mise` symlinked into `/usr/local/bin`; the
-symlink is swapped atomically.
+symlink is swapped atomically. On Windows it goes to `%ProgramFiles%\mise\<version>`,
+exposed through a `current` junction and a single machine PATH entry — the shape `go`,
+`java`, `node`, `trivy`, `syft`, `cosign`, `snyk` and `checkov` use, so switching versions
+never rewrites the PATH.
 
 If the requested version is already on disk and runs, install repoints the symlink and
 stops there — the pool image is baked straight after this phase and every node is then
@@ -53,26 +58,57 @@ Selecting `default` installs the newest release.
 
 ## Platforms
 
-**Linux amd64 and arm64 only**, although the project publishes Windows binaries too.
-
-mise is Rust built against the MSVC toolchain, so `mise.exe` needs `vcruntime140.dll` and
-`msvcp140.dll`. Those ship with the Visual C++ Redistributable, not with Windows, and a
-Server Core node has neither: `dir C:\Windows\System32\vcruntime140.dll` answers
-`File Not Found`. The binary then exits `0xC0000135` (`STATUS_DLL_NOT_FOUND`) before
-reaching `main`, printing nothing at all — the loader fails first.
-
-This is why the rest of the catalog is unaffected: `trivy`, `syft`, `k6`, `cosign` and
-`snyk` are Go, which needs no MSVC runtime, and `checkov` is a PyInstaller build that
-carries its own.
-
-Installing the redistributable from the install script was considered and rejected. It is
-a system component: it would outlive this app's uninstall, change the node for everything
-else on it, and add a download from Microsoft to every install. No other package here
-changes a node that way. If these nodes ever carry the runtime, re-adding Windows is two
-entries under `platforms` and the two PowerShell scripts, which git still has.
+Linux amd64 and arm64, and Windows amd64.
 
 The project also builds musl variants of the Linux binaries. These nodes are glibc, so
 those are never the right assets; the script takes the plain ones.
+
+### The Visual C++ runtime on Windows
+
+This is the one package here that ships binaries of its own, and the reason is worth
+writing down.
+
+mise is Rust built against the MSVC toolchain, so `mise.exe` needs `vcruntime140.dll` and
+`vcruntime140_1.dll`. Those ship with the Visual C++ Redistributable, not with Windows,
+and a Server Core node has neither: `dir C:\Windows\System32\vcruntime140.dll` answers
+`File Not Found`. The binary then exits `0xC0000135` (`STATUS_DLL_NOT_FOUND`) before
+reaching `main`, printing nothing at all — the loader fails first, so there is no error
+message to diagnose from. Verified on a node.
+
+The rest of the catalog is unaffected: `trivy`, `syft`, `k6`, `cosign` and `snyk` are Go,
+which needs no MSVC runtime, and `checkov` is a PyInstaller build that carries its own.
+
+Two ways out, and the deciding constraint is the **adhoc** scenario — customer machines
+joined to a pool, where the operating system is not ours to control and nothing can be
+assumed about what is already installed:
+
+- **Install the Redistributable** from the install script. It is a system component: it
+  would outlive this app's uninstall, change the node for everything else running on it,
+  need administrator rights, and add a download from Microsoft to every install. No other
+  package here changes a node that way.
+- **Carry the DLLs app-local.** Windows searches the executable's own directory before any
+  system directory, so two files next to `mise.exe` are enough. No administrator rights,
+  nothing outside `%ProgramFiles%\mise\<version>` touched, and the uninstall removes them
+  with the rest of that tree.
+
+The second. `install-mise.ps1` copies them from its own directory — where the runtime
+unpacks this app's payload — into the version's directory, right after `mise.exe`.
+
+Shipped: x64, file version **14.44.35211.0**, from Visual C++ 2015-2022 Redistributable:
+
+```text
+d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066  vcruntime140.dll
+1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f  vcruntime140_1.dll
+```
+
+Two consequences to keep in view. These are Microsoft binaries under its Redistributable
+Code terms, not this repository's licence. And security updates to them are now ours to
+track: nothing refreshes an app-local copy, so a new Redistributable means replacing these
+two files and the hashes above.
+
+Only amd64. The arm64 build of mise would need the arm64 pair of the same DLLs; until
+those are packaged, `install-mise.ps1` fails on an arm64 node rather than running with the
+wrong ones.
 
 ## Uninstall
 
@@ -85,7 +121,8 @@ Uninstalling the package removes mise, not what mise installed.
 
 ## Requirements
 
-- Root and `curl`.
+- Linux: root and `curl`. Windows: Windows PowerShell 5.1 and the rights to write
+  `%ProgramFiles%` and the machine PATH. No Visual C++ Redistributable — see above.
 - Outbound HTTPS to `github.com` and, for the `default` tag, `api.github.com`.
 
 ## Build
