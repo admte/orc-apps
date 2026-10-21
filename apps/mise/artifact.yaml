@@ -1,0 +1,52 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: mise
+  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  org.opencontainers.image.description: mise dev tool and runtime version manager
+  org.opencontainers.image.source: https://mise.jdx.dev
+config:
+  versions:
+    # Shaped after `snyk`, and deliberately not after `terraform` or `trivy`.
+    #
+    # Spec 142 describes `source: github_releases` with a `filter.pattern`, but the
+    # deployed server returns an empty list for that combination — tried here and on
+    # `cosign`, both times only `default` appeared. `github_releases` *without* a
+    # pattern does work (`trivy`), and so does the `json` source below. A pattern is
+    # needed here to strip the tag's leading "v", so `json` it is.
+    #
+    # The named `version` group is what extracts the version from the tag: a pattern
+    # without it only filters.
+    #
+    # No `latest_per`: mise releases on a calendar version, so "minor" is the month and
+    # grouping by it means one release per month. The list is the newest thirty instead.
+    source: json
+    url: "https://api.github.com/repos/jdx/mise/releases?per_page=100"
+    field: tag_name
+    filter:
+      pattern: '^v(?P<version>\d+\.\d+\.\d+)$'
+      limit: 30
+  install: {}
+  uninstall: {}
+files:
+  - install-mise.sh
+  - uninstall-mise.sh
+  - install-mise.ps1
+  - uninstall-mise.ps1
+  # mise.exe is Rust built against the MSVC toolchain and needs the Visual C++ runtime,
+  # which ships with the Redistributable rather than with Windows: a Server Core node has
+  # neither, and the binary exits 0xC0000135 (STATUS_DLL_NOT_FOUND) before reaching main,
+  # printing nothing. The install script copies these two next to mise.exe, where Windows
+  # looks first — no administrator rights, nothing changed outside this app's own tree.
+  #
+  # x64, from Visual C++ 2015-2022 Redistributable 14.44.35211.0. Microsoft redistributes
+  # these under its Redistributable Code terms, not this repository's licence.
+  - vcruntime140.dll
+  - vcruntime140_1.dll
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
+  # amd64 only: the runtime DLLs above are x64, and arm64 would need its own pair.
+  - os: windows
+    arch: amd64
