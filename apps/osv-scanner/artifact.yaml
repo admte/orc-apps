@@ -1,0 +1,43 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: osv-scanner
+  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  org.opencontainers.image.description: OSV-Scanner, vulnerability scanning against the OSV database
+  org.opencontainers.image.source: https://google.github.io/osv-scanner/
+config:
+  versions:
+    # The `json` source against the GitHub releases API, as `snyk`, `mise`, `forgejo` and
+    # `java`, `node` and `go` use. `github_releases` with a `filter.pattern` returns an
+    # empty version list on the deployed server — tried on `cosign` and on `mise`, both
+    # times only `default` appeared — and a pattern is needed here to strip the tag's
+    # leading "v".
+    #
+    # The named `version` group is what extracts the version from the tag: a pattern
+    # without it only filters.
+    #
+    # No `latest_per`: the project releases a few times a year, so the newest thirty are
+    # several years of history and grouping would hide patches rather than tidy them.
+    source: json
+    url: "https://api.github.com/repos/google/osv-scanner/releases?per_page=100"
+    field: tag_name
+    filter:
+      pattern: '^v(?P<version>\d+\.\d+\.\d+)$'
+      limit: 30
+  install: {}
+  uninstall: {}
+files:
+  - install-osv-scanner.sh
+  - uninstall-osv-scanner.sh
+  - install-osv-scanner.ps1
+  - uninstall-osv-scanner.ps1
+platforms:
+  # The project publishes bare binaries for all four, Windows arm64 included — which
+  # snyk, for instance, does not.
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
+  - os: windows
+    arch: amd64
+  - os: windows
+    arch: arm64
