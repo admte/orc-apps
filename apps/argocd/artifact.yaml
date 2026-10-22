@@ -1,0 +1,41 @@
+artifactType: application/vnd.orc8r.app.v1
+annotations:
+  org.opencontainers.image.title: argocd
+  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  org.opencontainers.image.description: Argo CD command-line client
+  org.opencontainers.image.source: https://argo-cd.readthedocs.io
+config:
+  versions:
+    # The `json` source against the GitHub releases API, as `snyk`, `osv-scanner`, `mise`
+    # and `forgejo` use. `github_releases` with a `filter.pattern` returns an empty
+    # version list on the deployed server — tried on `cosign` and on `mise`, both times
+    # only `default` appeared — and a pattern is needed here to strip the tag's leading
+    # "v" and to keep the release candidates out.
+    #
+    # The named `version` group is what extracts the version from the tag: a pattern
+    # without it only filters.
+    source: json
+    url: "https://api.github.com/repos/argoproj/argo-cd/releases?per_page=100"
+    field: tag_name
+    filter:
+      # The project maintains several minor lines at once and patches them in parallel,
+      # so one entry per line — its newest patch — is the useful list.
+      latest_per: minor
+      pattern: '^v(?P<version>\d+\.\d+\.\d+)$'
+      limit: 30
+  install: {}
+  uninstall: {}
+files:
+  - install-argocd.sh
+  - uninstall-argocd.sh
+  - install-argocd.ps1
+  - uninstall-argocd.ps1
+platforms:
+  # The release also carries linux ppc64le and s390x builds, which no node here runs,
+  # and no Windows arm64 build at all.
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
+  - os: windows
+    arch: amd64
