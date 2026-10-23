@@ -28,7 +28,8 @@ function Test-Minted($value) {
 
 # Reads a minted credential and returns its url, token, name and labels (joined by
 # commas). Two modes are understood: `persistent`, a repository runner, and
-# `persistent-org`, an organization runner whose url is `https://github.com/<org>`.
+# `persistent-org`, an organization runner whose url is `https://<host>[:port]/<org>`
+# — github.com or an Enterprise Server's own address.
 # Any other mode stops here with the message orc8r and an operator look for, so a
 # credential meant for a scope this version does not know is never registered as
 # something else. Labels are required: the runner registers with them alone,
@@ -59,14 +60,11 @@ function Get-MintedRegistration($value) {
 			$labels += $label
 		}
 	}
-	if ($cred.mode -ceq 'persistent-org') {
-		$owner = ''
-		if ($cred.url.StartsWith('https://github.com/')) {
-			$owner = $cred.url.Substring('https://github.com/'.Length).TrimEnd('/')
-		}
-		if (-not $owner -or $owner.Contains('/')) {
-			throw 'github-runner start: a persistent-org credential url must be https://github.com/<org>'
-		}
+	# https, a host with an optional port, then exactly one path segment (the org) and
+	# at most one trailing slash; no query or fragment. The same pattern as the sh.
+	if ($cred.mode -ceq 'persistent-org' -and
+		$cred.url -cnotmatch '\Ahttps://[A-Za-z0-9.-]+(:[0-9]+)?/[^/?#]+/?\z') {
+		throw 'github-runner start: a persistent-org credential url must be https://<host>/<org>'
 	}
 	if ($labels.Count -eq 0) {
 		throw 'github-runner start: the minted credential has no labels'

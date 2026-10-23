@@ -41,8 +41,9 @@ service backend lands.
     The node never holds an API credential in this form; orc8r owns the registration and
     removes it when the node ends. Two modes share these fields:
     - `persistent` registers a repository runner; `url` is `https://github.com/<owner>/<repo>`.
-    - `persistent-org` registers an organization runner; `url` is `https://github.com/<org>`,
-      and start refuses any other shape.
+    - `persistent-org` registers an organization runner; `url` is `https://<host>/<org>` — on
+      github.com or an Enterprise Server's own address, with an optional port — and start
+      refuses any other shape: not https, a repository path, no org, a query or a fragment.
 
     Any other `mode` fails start with
     `github-runner: credential mode <mode> is not supported by this version`, so a credential

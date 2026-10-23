@@ -53,13 +53,14 @@ is_minted() {
 # Reads a minted credential from stdin and prints its url, token, name and labels
 # (joined by commas), one per line. Two modes are understood: `persistent`, a
 # repository runner, and `persistent-org`, an organization runner whose url is
-# `https://github.com/<org>`. Any other mode stops here with the message orc8r and
-# an operator look for, so a credential meant for a scope this version does not
-# know is never registered as something else. Labels are required: the runner
+# `https://<host>[:port]/<org>`, on github.com or an Enterprise Server. Any other
+# mode stops here with the message orc8r and an operator look for, so a credential
+# meant for a scope this version does not know is never registered as something
+# else. Labels are required: the runner
 # registers with them alone, without GitHub's default labels.
 minted_registration() {
 	python3 -c '
-import json, sys
+import json, re, sys
 def die(message):
     print(message, file=sys.stderr)
     sys.exit(1)
@@ -78,10 +79,12 @@ for key in ("url", "token", "name"):
     if not isinstance(value, str) or not value:
         die("github-runner start: the minted credential has no %s" % key)
     fields.append(value)
-if mode == "persistent-org":
-    owner = fields[0][len("https://github.com/"):].rstrip("/")
-    if not fields[0].startswith("https://github.com/") or not owner or "/" in owner:
-        die("github-runner start: a persistent-org credential url must be https://github.com/<org>")
+# https, a host with an optional port, then exactly one path segment (the org) and
+# at most one trailing slash; no query or fragment. Kept as one pattern so the ps1
+# check is the same expression.
+org_url = r"https://[A-Za-z0-9.-]+(:[0-9]+)?/[^/?#]+/?"
+if mode == "persistent-org" and not re.fullmatch(org_url, fields[0]):
+    die("github-runner start: a persistent-org credential url must be https://<host>/<org>")
 labels = cred.get("labels") or []
 if not isinstance(labels, list) or not all(isinstance(l, str) and l for l in labels):
     die("github-runner start: the minted credential labels must be a list of names")
