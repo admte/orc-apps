@@ -139,6 +139,7 @@ low-level, one-platform extract.
 | jenkins-agent | draft | Jenkins Swarm agent as a managed service; drains the in-flight build on stop; linux + windows |
 | nvidia-driver | draft | NVIDIA GPU driver from Ubuntu's signed packages; reboots once if needed; linux (Ubuntu) |
 | terraform | draft | Terraform CLI from HashiCorp Releases; version-scoped install; linux only |
+| argocd | draft | Argo CD command-line client; version-scoped install; linux + windows |
 | vllm | draft | vLLM inference server as a managed service; one model over an OpenAI-compatible endpoint; linux + NVIDIA GPU |
 
 ## Related repos
