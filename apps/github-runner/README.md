@@ -38,9 +38,16 @@ service backend lands.
   - **A registration orc8r minted** from the project's Source Control connection, delivered in
     the same file as
     `{"mode":"persistent","url":"…","token":"<registration token>","name":"…","labels":["…"]}`.
-    The node never holds an API credential in this mode; orc8r owns the registration and
-    removes it when the node ends. Any `mode` other than `persistent` fails start with
-    `github-runner: credential mode <mode> is not supported by this version`.
+    The node never holds an API credential in this form; orc8r owns the registration and
+    removes it when the node ends. Two modes share these fields:
+    - `persistent` registers a repository runner; `url` is `https://github.com/<owner>/<repo>`.
+    - `persistent-org` registers an organization runner; `url` is `https://github.com/<org>`,
+      and start refuses any other shape.
+
+    Any other `mode` fails start with
+    `github-runner: credential mode <mode> is not supported by this version`, so a credential
+    for a scope this version does not know is never registered as something else. `labels`
+    must hold at least one name.
 
 The runner name is the host name and its label is the pool name (sourced from the `pool.name`
 x-source), so neither is a parameter; a minted registration carries its own name and labels
@@ -75,10 +82,18 @@ ordinary service restart — and registration is skipped, which is also what `co
 demands: it refuses to configure an already-configured directory. The registration token is
 minted at the moment it is used and never written anywhere.
 
-With a minted registration the script runs
-`config.sh --unattended --url <url> --token <token> --name <name> --labels <labels> --replace`
+With a minted registration, in either mode, the script runs
+
+```text
+config.sh --unattended --url <url> --token <token> --name <name> \
+  --no-default-labels --labels <labels> --replace
+```
+
 from the credential's own fields instead — the token in it is already a registration token, and
 the `url` parameter, host name, and pool name are not used. The same `.runner` rule applies.
+`--no-default-labels` means the runner carries the credential's labels and nothing else: a job
+anywhere in the repository or organization that asks for `self-hosted`, `linux`, or `X64` is
+never routed to it. A personal access token keeps GitHub's default labels.
 
 With a personal access token it then **restores the pool label**, on both paths and
 idempotently: it looks the runner up by name (walking the paginated runner list, the same
@@ -108,10 +123,10 @@ until no `Runner.Worker` process is running out of the runner directory and exit
 not deregister and it does not stop the listener — the runtime does that next, with
 `stop.signal: SIGINT`, which the listener reads as "finish the current job, then exit".
 
-Removing the pool label leaves the runner's default labels (`self-hosted`, the OS, the
-architecture) in place. A workflow that targets those alone can still be routed to this runner
-between the label removal and the stop signal. The label comes back on the next start, which
-re-adds it through the API, so a drained runner rejoins its pool.
+With a personal access token, removing the pool label leaves the runner's default labels
+(`self-hosted`, the OS, the architecture) in place. A workflow that targets those alone can
+still be routed to this runner between the label removal and the stop signal. The label comes
+back on the next start, which re-adds it through the API, so a drained runner rejoins its pool.
 
 **stopped** (`stopped-github-runner.{sh,ps1}`, `timeout: 120s`) runs after every exit and
 looks at `APP_STOP_REASON`. On `terminate` — the node is ending and this install will never

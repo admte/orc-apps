@@ -51,8 +51,12 @@ is_minted() {
 }
 
 # Reads a minted credential from stdin and prints its url, token, name and labels
-# (joined by commas), one per line. Only the persistent mode is understood; any
-# other mode stops here with the message orc8r and an operator look for.
+# (joined by commas), one per line. Two modes are understood: `persistent`, a
+# repository runner, and `persistent-org`, an organization runner whose url is
+# `https://github.com/<org>`. Any other mode stops here with the message orc8r and
+# an operator look for, so a credential meant for a scope this version does not
+# know is never registered as something else. Labels are required: the runner
+# registers with them alone, without GitHub's default labels.
 minted_registration() {
 	python3 -c '
 import json, sys
@@ -66,7 +70,7 @@ except ValueError as err:
 if not isinstance(cred, dict):
     die("github-runner start: the minted credential is not a JSON object")
 mode = cred.get("mode")
-if mode != "persistent":
+if mode not in ("persistent", "persistent-org"):
     die("github-runner: credential mode %s is not supported by this version" % mode)
 fields = []
 for key in ("url", "token", "name"):
@@ -74,9 +78,15 @@ for key in ("url", "token", "name"):
     if not isinstance(value, str) or not value:
         die("github-runner start: the minted credential has no %s" % key)
     fields.append(value)
+if mode == "persistent-org":
+    owner = fields[0][len("https://github.com/"):].rstrip("/")
+    if not fields[0].startswith("https://github.com/") or not owner or "/" in owner:
+        die("github-runner start: a persistent-org credential url must be https://github.com/<org>")
 labels = cred.get("labels") or []
 if not isinstance(labels, list) or not all(isinstance(l, str) and l for l in labels):
     die("github-runner start: the minted credential labels must be a list of names")
+if not labels:
+    die("github-runner start: the minted credential has no labels")
 if any("," in l for l in labels):
     die("github-runner start: a minted credential label contains a comma")
 fields.append(",".join(labels))
@@ -224,9 +234,10 @@ labels=${POOL:-}
 # which is what makes a terminated-then-restarted install register again rather
 # than start unconfigured.
 #
-# A registration orc8r minted carries its own url, runner name and labels, and
-# the token in it is already a registration token, so it goes to config.sh as is;
-# the operator's URL, the host name and POOL are not used for it. An absent token
+# A registration orc8r minted carries its own url — a repository or, in the
+# persistent-org mode, an organization — runner name and labels, and the token in
+# it is already a registration token, so it goes to config.sh as is; the
+# operator's URL, the host name and POOL are not used for it. An absent token
 # is not fatal here: a node with `.runner` starts without one, and the PAT
 # registration below fails on it by name.
 credential=$(token_value 2>/dev/null) || credential=
@@ -247,11 +258,11 @@ elif [ "$minted" = yes ]; then
 	runner_name=$(printf '%s\n' "$registration" | sed -n 3p)
 	labels=$(printf '%s\n' "$registration" | sed -n 4p)
 
-	set -- --unattended --url "$minted_url" --token "$minted_token" --name "$runner_name"
-	if [ -n "$labels" ]; then
-		set -- "$@" --labels "$labels"
-	fi
-	set -- "$@" --replace
+	# Only the credential's labels, none of GitHub's defaults: a job elsewhere in
+	# the repository or organization that asks for `self-hosted`, an OS or an
+	# architecture must not land on a machine orc8r runs for one pool.
+	set -- --unattended --url "$minted_url" --token "$minted_token" --name "$runner_name" \
+		--no-default-labels --labels "$labels" --replace
 
 	note "registering with the minted registration name=$runner_name labels=$labels user=$SERVICE_USER"
 	as_service_user ./config.sh "$@"

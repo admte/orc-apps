@@ -27,15 +27,19 @@ function Test-Minted($value) {
 }
 
 # Reads a minted credential and returns its url, token, name and labels (joined by
-# commas). Only the persistent mode is understood; any other mode stops here with
-# the message orc8r and an operator look for.
+# commas). Two modes are understood: `persistent`, a repository runner, and
+# `persistent-org`, an organization runner whose url is `https://github.com/<org>`.
+# Any other mode stops here with the message orc8r and an operator look for, so a
+# credential meant for a scope this version does not know is never registered as
+# something else. Labels are required: the runner registers with them alone,
+# without GitHub's default labels.
 function Get-MintedRegistration($value) {
 	try {
 		$cred = $value | ConvertFrom-Json
 	} catch {
 		throw "github-runner start: the minted credential is not valid JSON: $($_.Exception.Message)"
 	}
-	if ($cred.mode -ne 'persistent') {
+	if ($cred.mode -cnotin 'persistent', 'persistent-org') {
 		throw "github-runner: credential mode $($cred.mode) is not supported by this version"
 	}
 	foreach ($key in 'url', 'token', 'name') {
@@ -54,6 +58,18 @@ function Get-MintedRegistration($value) {
 			}
 			$labels += $label
 		}
+	}
+	if ($cred.mode -ceq 'persistent-org') {
+		$owner = ''
+		if ($cred.url.StartsWith('https://github.com/')) {
+			$owner = $cred.url.Substring('https://github.com/'.Length).TrimEnd('/')
+		}
+		if (-not $owner -or $owner.Contains('/')) {
+			throw 'github-runner start: a persistent-org credential url must be https://github.com/<org>'
+		}
+	}
+	if ($labels.Count -eq 0) {
+		throw 'github-runner start: the minted credential has no labels'
 	}
 	return [pscustomobject]@{
 		url    = $cred.url
@@ -127,8 +143,9 @@ $labels = if ($env:POOL) { $env:POOL } else { '' }
 # which is what makes a terminated-then-restarted install register again rather
 # than start unconfigured.
 #
-# A registration orc8r minted carries its own url, runner name and labels, and the
-# token in it is already a registration token, so it goes to config.cmd as is; the
+# A registration orc8r minted carries its own url — a repository or, in the
+# persistent-org mode, an organization — runner name and labels, and the token in
+# it is already a registration token, so it goes to config.cmd as is; the
 # operator's URL, the host name and POOL are not used for it. An absent token is
 # not fatal here: a node with `.runner` starts without one, and the PAT
 # registration below fails on it by name.
@@ -144,11 +161,11 @@ if (Test-Path (Join-Path $workDir '.runner')) {
 	$runnerName = $registration.name
 	$labels = $registration.labels
 
-	$configArgs = @('--unattended', '--url', $registration.url, '--token', $registration.token, '--name', $runnerName)
-	if ($labels) {
-		$configArgs += @('--labels', $labels)
-	}
-	$configArgs += '--replace'
+	# Only the credential's labels, none of GitHub's defaults: a job elsewhere in the
+	# repository or organization that asks for `self-hosted`, an OS or an
+	# architecture must not land on a machine orc8r runs for one pool.
+	$configArgs = @('--unattended', '--url', $registration.url, '--token', $registration.token, '--name', $runnerName,
+		'--no-default-labels', '--labels', $labels, '--replace')
 
 	Write-Host "github-runner start: registering with the minted registration name=$runnerName labels=$labels"
 	& .\config.cmd @configArgs
