@@ -25,6 +25,11 @@ for any phase, so each one resolves from the package by name and per platform.
 has systemd and Windows SCM backends today, and darwin returns to the list when the launchd
 service backend lands.
 
+On Linux, install also installs what the runner needs from the system's package manager: `tar`
+when the image has none, and the .NET libraries (libicu among them) through the runner's own
+`bin/installdependencies.sh`. Install fails only when the libraries are still missing after it,
+so an image that cannot run the runner fails its bake instead of every node failing at start.
+
 ## Parameters
 
 - `url` - **required** GitHub repository or organization URL, for example `https://github.com/org/repo`.
