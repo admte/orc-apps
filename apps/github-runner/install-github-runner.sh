@@ -12,6 +12,26 @@ need() {
 	command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
 }
 
+# Installs a tool the image left out: minimal EL 9 and 10 cloud images ship
+# without tar.
+ensure_tool() {
+	command -v "$1" >/dev/null 2>&1 && return 0
+	echo "github-runner install: installing $1" >&2
+	if command -v apt-get >/dev/null 2>&1; then
+		DEBIAN_FRONTEND=noninteractive apt-get update -qq
+		DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$1"
+	elif command -v dnf >/dev/null 2>&1; then
+		dnf install -y -q "$1"
+	elif command -v yum >/dev/null 2>&1; then
+		yum install -y -q "$1"
+	elif command -v zypper >/dev/null 2>&1; then
+		zypper --non-interactive --quiet install "$1"
+	else
+		fail "$1 is required and no supported package manager was found"
+	fi
+	need "$1"
+}
+
 # The Actions runner refuses to configure or run as root ("Must not run with
 # sudo"), but lifecycle phases execute as root. Create a dedicated service
 # account here so start-github-runner.sh can drop to it.
@@ -127,17 +147,18 @@ runner_arch() {
 	esac
 }
 
+[ "$(id -u)" -eq 0 ] || fail "must run as root"
+
 need curl
 need python3
 # Not used here any more, but the start phase drops to the service account with
 # it; a bake that produced an image without it would only fail at first boot.
 need setpriv
-need tar
+ensure_tool tar
 
 github_token=$(token_value)
 work_dir=github-runner
 
-[ "$(id -u)" -eq 0 ] || fail "must run as root"
 ensure_service_user
 
 mkdir -p "$work_dir"
@@ -186,6 +207,26 @@ else
 	echo "github-runner install: no published checksum; skipping verification archive=$archive" >&2
 fi
 tar -xzf "$tmp/$archive" -C "$work_dir"
+
+# The runner is a .NET program that exits at first start without libicu and the
+# other libraries .NET needs, and Debian 13 and EL images ship without libicu.
+# The runner carries its own installer for them, which knows each distribution's
+# package names.
+# The installer is all or nothing, though, so it may fail over a package the
+# runner can do without; what decides is whether the libraries are there after.
+if [ "$(runner_os)" = linux ]; then
+	echo "github-runner install: installing the runner's dependencies" >&2
+	DEBIAN_FRONTEND=noninteractive "$work_dir/bin/installdependencies.sh" >&2 ||
+		echo "github-runner install: the runner's dependency installer failed; checking its libraries" >&2
+	# The trace provider's lttng is optional, and .NET opens ICU and OpenSSL at
+	# run time, so ldd cannot see those two.
+	missing=$(for lib in "$work_dir"/bin/*.so; do
+		[ "${lib##*/}" = libcoreclrtraceptprovider.so ] || ldd "$lib" 2>/dev/null
+	done | awk '/not found/ { print $1 }' | sort -u | tr '\n' ' ')
+	[ -z "$missing" ] || fail "the runner's libraries are missing: $missing"
+	ldconfig -p | grep -q 'libicuuc\.so' || fail "the runner needs libicu, which is not installed"
+	ldconfig -p | grep -q 'libssl\.so' || fail "the runner needs OpenSSL, which is not installed"
+fi
 chown -R "$SERVICE_USER:$SERVICE_USER" "$work_dir"
 
 # Nothing below this point may create node identity. A pool bake runs the install

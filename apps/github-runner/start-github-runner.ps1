@@ -1,4 +1,7 @@
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell on Server 2016 offers only TLS 1.0 and 1.1 by default, and
+# GitHub accepts nothing older than TLS 1.2.
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 # Start phase: registration is node identity, so it happens here — once per node,
 # every time a node that has none comes up — and never in install. A pool bake
