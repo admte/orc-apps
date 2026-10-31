@@ -216,7 +216,7 @@ tar -xzf "$tmp/$archive" -C "$work_dir"
 # runner can do without; what decides is whether the libraries are there after.
 if [ "$(runner_os)" = linux ]; then
 	echo "github-runner install: installing the runner's dependencies" >&2
-	DEBIAN_FRONTEND=noninteractive "$work_dir/bin/installdependencies.sh" >&2 ||
+	DEBIAN_FRONTEND=noninteractive "$work_dir/bin/installdependencies.sh" ||
 		echo "github-runner install: the runner's dependency installer failed; checking its libraries" >&2
 	# The trace provider's lttng is optional, and .NET opens ICU and OpenSSL at
 	# run time, so ldd cannot see those two.
