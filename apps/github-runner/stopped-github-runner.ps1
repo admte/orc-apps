@@ -1,4 +1,7 @@
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell on Server 2016 offers only TLS 1.0 and 1.1 by default, and
+# GitHub accepts nothing older than TLS 1.2.
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 # Post-exit hook: the listener is already gone, so GitHub will not refuse the
 # removal as busy. A registration made with a personal access token is released

@@ -1,4 +1,7 @@
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell on Server 2016 offers only TLS 1.0 and 1.1 by default, and
+# GitHub accepts nothing older than TLS 1.2.
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 # Quiesce hook: the listener is still running and may be mid-job. With a personal
 # access token, take the pool label off the runner so the queue stops routing work

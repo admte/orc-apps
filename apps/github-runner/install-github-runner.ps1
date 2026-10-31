@@ -1,4 +1,7 @@
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell on Server 2016 offers only TLS 1.0 and 1.1 by default, and
+# GitHub accepts nothing older than TLS 1.2.
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 # Returns the token value, or nothing when none was delivered: install needs a
 # credential only to ask GitHub's downloads API, and has a public path without one.
