@@ -14,7 +14,7 @@ config:
   install:
     command: sh install-apt.sh
   start:
-    command: [sh, start-apt.sh]
+    command: [./start-apt.sh]
 files:
   - install-apt.sh
   - start-apt.sh
