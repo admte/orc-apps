@@ -231,5 +231,11 @@ if ($minted) {
 # The listener runs as the account the runtime runs as; there is no unprivileged-user
 # rule to satisfy on Windows.
 Write-Host "github-runner start: starting the listener name=$runnerName dir=$workDir"
+# The jobs this listener runs must never see this app's params (the token file,
+# the url, the pool) or the host's app variables, which a repository's own tests
+# may read under the same names.
+foreach ($name in 'TOKEN', 'TOKEN_FILE', 'URL', 'POOL', 'APP_INSTANCE', 'APP_SERVICE') {
+	Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
+}
 & .\run.cmd
 exit $LASTEXITCODE
