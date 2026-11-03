@@ -12,7 +12,7 @@ config:
         type: string
         description: Space-separated package names (e.g. git curl htop)
   install:
-    command: sh install-apt.sh
+    command: [./install-apt.sh]
   start:
     command: [./start-apt.sh]
 files:
