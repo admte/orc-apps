@@ -306,12 +306,10 @@ else
 		note "could not ensure the pool label; starting without it name=$runner_name label=$labels"
 fi
 
-# The listener starts with the environment a runner account of its own would have,
-# not this app's: the jobs it runs must never see the app's params (the token file,
+# The jobs this listener runs must never see this app's params (the token file,
 # the url, the pool) or the host's app variables, which a repository's own tests
-# may read under the same names.
+# may read under the same names. Everything else in the environment passes through.
 note "starting the listener name=$runner_name dir=$work_dir"
 exec setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_USER" --init-groups \
-	env -i HOME="$work_dir" USER="$SERVICE_USER" LOGNAME="$SERVICE_USER" \
-	SHELL=/bin/sh LANG="${LANG:-C.UTF-8}" \
-	PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin ./run.sh
+	env -u TOKEN -u TOKEN_FILE -u URL -u POOL -u APP_INSTANCE -u APP_SERVICE \
+	HOME="$work_dir" ./run.sh
