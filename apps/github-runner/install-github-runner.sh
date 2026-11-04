@@ -1,12 +1,47 @@
 #!/bin/sh
 set -eu
 
-SERVICE_USER=${SERVICE_USER:-ghrunner}
+# Install phase: downloads and unpacks the runner, and nothing else. It takes no
+# url and no token: the build is the latest public release, whichever credential
+# the node later registers with, and the runner updates itself from there.
+
+usage() {
+	cat <<'USAGE'
+Usage: install-github-runner.sh --os=OS --arch=ARCH [--service-user=NAME]
+
+Downloads the latest GitHub Actions runner release into ./github-runner and hands
+it to the service account. Registers nothing. Run as root.
+
+  --os=OS              linux or darwin
+  --arch=ARCH          amd64 or arm64
+  --service-user=NAME  account the runner runs as, created if missing (default: ghrunner)
+  --help               show this help
+USAGE
+}
 
 fail() {
 	echo "github-runner install: $*" >&2
 	exit 1
 }
+
+usage_error() {
+	echo "github-runner install: $*" >&2
+	usage >&2
+	exit 2
+}
+
+target_os=
+target_arch=
+service_user=ghrunner
+for arg; do
+	case $arg in
+	--os=*) target_os=${arg#--os=} ;;
+	--arch=*) target_arch=${arg#--arch=} ;;
+	--service-user=*) service_user=${arg#--service-user=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
 
 need() {
 	command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
@@ -36,48 +71,12 @@ ensure_tool() {
 # sudo"), but lifecycle phases execute as root. Create a dedicated service
 # account here so start-github-runner.sh can drop to it.
 ensure_service_user() {
-	if id "$SERVICE_USER" >/dev/null 2>&1; then
+	if id "$service_user" >/dev/null 2>&1; then
 		return 0
 	fi
 	need useradd
-	useradd -r -U -M -s /usr/sbin/nologin "$SERVICE_USER"
-	id "$SERVICE_USER" >/dev/null 2>&1 || fail "failed to create service user $SERVICE_USER"
-}
-
-# Selects the runner build GitHub's service wants for this target from the
-# runner-downloads API response: prints "download_url filename sha256_checksum".
-select_download() {
-	python3 -c '
-import json, sys
-target_os, target_arch = sys.argv[1], sys.argv[2]
-for entry in json.load(sys.stdin):
-    if entry.get("os") == target_os and entry.get("architecture") == target_arch:
-        print(entry.get("download_url", ""))
-        print(entry.get("filename", ""))
-        print(entry.get("sha256_checksum", ""))
-        break
-' "$1" "$2"
-}
-
-# Prints the token value, or nothing when none was delivered: install needs a
-# credential only to ask GitHub's downloads API, and has a public path without one.
-token_value() {
-	if [ -n "${TOKEN_FILE:-}" ]; then
-		tr -d '\r\n' <"$TOKEN_FILE"
-	elif [ -n "${TOKEN:-}" ]; then
-		printf '%s' "$TOKEN"
-	fi
-}
-
-# The token param holds either an operator's personal access token or a
-# registration orc8r minted for this node, a JSON object. They are told apart by
-# shape: a value whose first non-blank character is `{` is the minted credential.
-is_minted() {
-	trimmed=${1#"${1%%[![:space:]]*}"}
-	case "$trimmed" in
-	'{'*) return 0 ;;
-	*) return 1 ;;
-	esac
+	useradd -r -U -M -s /usr/sbin/nologin "$service_user"
+	id "$service_user" >/dev/null 2>&1 || fail "failed to create service user $service_user"
 }
 
 # Selects this target's archive from GitHub's public release metadata for the
@@ -112,40 +111,20 @@ for asset in release.get("assets", []):
 ' "$1" "$2"
 }
 
-github_api_path() {
-	url=${URL:-}
-	case "$url" in
-	https://github.com/*) ;;
-	*) fail "URL must start with https://github.com/" ;;
-	esac
-	path=${url#https://github.com/}
-	path=${path%.git}
-	path=${path%/}
-	owner=${path%%/*}
-	rest=${path#*/}
-	[ -n "$owner" ] || fail "GitHub owner is required"
-	if [ "$rest" != "$path" ] && [ -n "$rest" ]; then
-		printf 'repos/%s/%s' "$owner" "$rest"
-	else
-		printf 'orgs/%s' "$owner"
-	fi
-}
-
-runner_os() {
-	case "$(uname -s)" in
-	Linux) printf 'linux' ;;
-	Darwin) printf 'osx' ;;
-	*) fail "unsupported OS $(uname -s)" ;;
-	esac
-}
-
-runner_arch() {
-	case "$(uname -m)" in
-	x86_64 | amd64) printf 'x64' ;;
-	aarch64 | arm64) printf 'arm64' ;;
-	*) fail "unsupported architecture $(uname -m)" ;;
-	esac
-}
+# The names GitHub's runner archives use for this target.
+case $target_os in
+linux) runner_os=linux ;;
+darwin) runner_os=osx ;;
+'') usage_error "--os is required" ;;
+*) fail "unsupported OS $target_os" ;;
+esac
+case $target_arch in
+amd64) runner_arch=x64 ;;
+arm64) runner_arch=arm64 ;;
+'') usage_error "--arch is required" ;;
+*) fail "unsupported architecture $target_arch" ;;
+esac
+[ -n "$service_user" ] || usage_error "--service-user must not be empty"
 
 [ "$(id -u)" -eq 0 ] || fail "must run as root"
 
@@ -156,7 +135,6 @@ need python3
 need setpriv
 ensure_tool tar
 
-github_token=$(token_value)
 work_dir=github-runner
 
 ensure_service_user
@@ -164,33 +142,18 @@ ensure_service_user
 mkdir -p "$work_dir"
 work_dir=$(CDPATH= cd -- "$work_dir" && pwd)
 
-# The runner self-updates afterward, so no version pinning on either path.
-if [ -n "$github_token" ] && ! is_minted "$github_token"; then
-	# A personal access token: ask GitHub which runner build its service currently
-	# wants for this registration target (authenticated: 5000 req/h vs 60).
-	[ -n "${URL:-}" ] || fail "URL is required"
-	api_path=$(github_api_path)
-	downloads_json=$(curl -fsSL \
-		-H "Accept: application/vnd.github+json" \
-		-H "Authorization: token $github_token" \
-		"https://api.github.com/$api_path/actions/runners/downloads") ||
-		fail "failed to list runner downloads"
-	selected=$(printf '%s' "$downloads_json" | select_download "$(runner_os)" "$(runner_arch)")
-else
-	# A minted registration, or none delivered yet: install holds no API
-	# credential, so it takes the latest release from GitHub's public metadata.
-	echo "github-runner install: no API token; using the latest public runner release" >&2
-	release_json=$(curl -fsSL \
-		-H "Accept: application/vnd.github+json" \
-		"https://api.github.com/repos/actions/runner/releases/latest") ||
-		fail "failed to read the latest runner release"
-	selected=$(printf '%s' "$release_json" | select_release_asset "$(runner_os)" "$(runner_arch)")
-fi
+# The runner self-updates afterward, so no version pinning. GitHub's public
+# release metadata needs no credential, which is why install takes none.
+release_json=$(curl -fsSL \
+	-H "Accept: application/vnd.github+json" \
+	"https://api.github.com/repos/actions/runner/releases/latest") ||
+	fail "failed to read the latest runner release"
+selected=$(printf '%s' "$release_json" | select_release_asset "$runner_os" "$runner_arch")
 url=$(printf '%s\n' "$selected" | sed -n 1p)
 archive=$(printf '%s\n' "$selected" | sed -n 2p)
 checksum=$(printf '%s\n' "$selected" | sed -n 3p)
 [ -n "$url" ] && [ -n "$archive" ] ||
-	fail "no runner download for $(runner_os)/$(runner_arch)"
+	fail "no runner download for $runner_os/$runner_arch"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -214,7 +177,7 @@ tar -xzf "$tmp/$archive" -C "$work_dir"
 # package names.
 # The installer is all or nothing, though, so it may fail over a package the
 # runner can do without; what decides is whether the libraries are there after.
-if [ "$(runner_os)" = linux ]; then
+if [ "$runner_os" = linux ]; then
 	echo "github-runner install: installing the runner's dependencies" >&2
 	DEBIAN_FRONTEND=noninteractive "$work_dir/bin/installdependencies.sh" ||
 		echo "github-runner install: the runner's dependency installer failed; checking its libraries" >&2
@@ -227,7 +190,7 @@ if [ "$(runner_os)" = linux ]; then
 	ldconfig -p | grep -q 'libicuuc\.so' || fail "the runner needs libicu, which is not installed"
 	ldconfig -p | grep -q 'libssl\.so' || fail "the runner needs OpenSSL, which is not installed"
 fi
-chown -R "$SERVICE_USER:$SERVICE_USER" "$work_dir"
+chown -R "$service_user:$service_user" "$work_dir"
 
 # Nothing below this point may create node identity. A pool bake runs the install
 # phase alone and snapshots the disk, so anything written here is shared by every
@@ -235,4 +198,4 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$work_dir"
 # builder that no longer exists, and `config.sh` writes `.runner` and
 # `.credentials` — the runner's own auth material — into the snapshot. The
 # registration is start-github-runner.sh's, once per node.
-echo "github-runner install: complete dir=$work_dir user=$SERVICE_USER" >&2
+echo "github-runner install: complete dir=$work_dir user=$service_user" >&2
