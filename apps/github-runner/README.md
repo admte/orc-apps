@@ -17,26 +17,11 @@ github-runner/
   stopped-github-runner.ps1
 ```
 
-The app is format v2 (`application/vnd.orc8r.app.v2`): every phase names the script it runs
-and passes each value it needs as one flag, `--name=value` on Unix and `-Name:value` in
-PowerShell. Nothing app-specific is in a phase's environment, so the listener, and every job it
-runs, inherits none of the app's configuration. The token is sensitive and reaches a phase only
-as the path of a `0600` file, `${token_file}`; its value never appears in argv.
-
-| Phase | Unix flags | Windows parameters |
-|---|---|---|
-| install | `--os`, `--arch` (build time) | `-Arch` (build time) |
-| start | `--url`, `--token-file`, `--pool` | `-Url`, `-TokenFile`, `-Pool` |
-| stop | `--url`, `--token-file`, `--pool` | `-Url`, `-TokenFile`, `-Pool` |
-| stopped | `--url`, `--token-file`, `--stop-reason` | `-Url`, `-TokenFile`, `-StopReason` |
-
-A value that is unset, `pool` with no pool or `token` before one is minted, drops its flag. The
-scripts also take knobs the manifest does not pass, each with its default: `--service-user`
-(`ghrunner`; install, start, stopped), `--job-timeout` (`3540`) and `--poll-interval` (`10`) on
-stop, `--attempts` (`3`) and `--retry-interval` (`5`) on stopped; on Windows `-JobTimeout`,
-`-PollInterval`, `-Attempts`, `-RetryInterval`. Each `.sh` answers `--help`, exits 2 on an
-argument it does not know, and runs under any POSIX `sh`; each `.ps1` has comment help
-(`Get-Help .\start-github-runner.ps1 -Detailed`) and refuses a parameter it does not declare.
+Each script takes its settings as flags, `--url=…` on Linux and `-Url …` in PowerShell, and
+lists them with `--help` (or `Get-Help .\start-github-runner.ps1 -Detailed` on Windows). The
+token is read from a file, `--token-file`. Optional knobs keep their defaults unless given:
+`--service-user` (`ghrunner`), `--job-timeout` (`3540`) and `--poll-interval` (`10`) on stop,
+`--attempts` (`3`) and `--retry-interval` (`5`) on stopped.
 
 `linux/amd64`, `linux/arm64`, and `windows/amd64`. macOS is not in the manifest: the runtime
 has systemd and Windows SCM backends today, and darwin returns to the list when the launchd
@@ -170,15 +155,13 @@ identity and the label are both whole again by the time the listener comes up.
 
 ## Build + Push
 
-From the repo root, after `./scripts/install.sh` and `./orc login ghcr.io`, with an orc that
-builds format v2:
+From the repo root, after `./scripts/install.sh` and `./orc login ghcr.io`:
 
 ```bash
 ./orc build ./apps/github-runner --push
 ```
 
-This publishes `github-runner:default`. Publish it to a zone only once that zone's servers and
-hosts run app format v2; an older agent is refused it by name. Validate locally without pushing:
+This publishes `github-runner:default`. Validate locally without pushing:
 
 ```bash
 ./orc build ./apps/github-runner --output /tmp/github-runner-oci
@@ -186,7 +169,7 @@ hosts run app format v2; an older agent is refused it by name. Validate locally 
 
 ## Manual test
 
-Every script runs by hand the way the manifest runs it; `--help` lists its flags:
+Every script runs by hand; `--help` lists its flags:
 
 ```bash
 ./start-github-runner.sh --help
