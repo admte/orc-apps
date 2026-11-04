@@ -12,7 +12,7 @@ set -eu
 
 usage() {
 	cat <<'USAGE'
-Usage: start-github-runner.sh [--url=URL] [--token-file=PATH] [--pool=LABEL]
+Usage: start-github-runner.sh [--url=URL] [--token-file=PATH] [--labels=LIST]
                               [--service-user=NAME]
 
 Registers this node's runner if it has no identity yet, then becomes the
@@ -22,7 +22,8 @@ listener. Run as root from the directory install ran in.
                        access token, ignored for a registration orc8r minted
   --token-file=PATH    file holding a personal access token or orc8r's minted
                        registration (JSON); optional when already registered
-  --pool=LABEL         label the runner carries with a personal access token
+  --labels=LIST        comma-separated labels the runner carries with a personal
+                       access token
   --service-user=NAME  account the listener runs as (default: ghrunner)
   --help               show this help
 USAGE
@@ -39,21 +40,42 @@ usage_error() {
 	exit 2
 }
 
+# Sets labels to the comma-separated list in $1 with the space around each item
+# trimmed and empty items dropped. GitHub refuses a label with a space in it or
+# longer than 256 characters, so such a label stops here.
+parse_labels() {
+	labels=
+	rest=$1,
+	while [ -n "$rest" ]; do
+		item=${rest%%,*}
+		rest=${rest#*,}
+		item=${item#"${item%%[![:space:]]*}"}
+		item=${item%"${item##*[![:space:]]}"}
+		[ -n "$item" ] || continue
+		case $item in
+		*[[:space:][:cntrl:]]*) usage_error "label '$item' contains a space or a control character" ;;
+		esac
+		[ "${#item}" -le 256 ] || usage_error "label '$item' is longer than 256 characters"
+		labels=${labels:+$labels,}$item
+	done
+}
+
 repo_url=
 token_file=
-pool=
+labels_arg=
 service_user=ghrunner
 for arg; do
 	case $arg in
 	--url=*) repo_url=${arg#--url=} ;;
 	--token-file=*) token_file=${arg#--token-file=} ;;
-	--pool=*) pool=${arg#--pool=} ;;
+	--labels=*) labels_arg=${arg#--labels=} ;;
 	--service-user=*) service_user=${arg#--service-user=} ;;
 	--help) usage; exit 0 ;;
 	*) usage_error "unknown argument $arg" ;;
 	esac
 done
 [ -n "$service_user" ] || usage_error "--service-user must not be empty"
+parse_labels "$labels_arg"
 
 note() {
 	echo "github-runner start: $*" >&2
@@ -191,23 +213,24 @@ find_runner_id() {
 	return 0
 }
 
-# json.dumps, so a label with a quote or a backslash in it cannot break the body.
+# Every label in the comma-separated $labels, in one body. json.dumps, so a label
+# with a quote or a backslash in it cannot break the body.
 label_payload() {
-	python3 -c 'import json,sys; print(json.dumps({"labels": [sys.argv[1]]}))' "$labels"
+	python3 -c 'import json,sys; print(json.dumps({"labels": sys.argv[1].split(",")}))' "$labels"
 }
 
-# Puts the pool label back. stop-github-runner.sh takes it off through the API so
+# Puts the labels back. stop-github-runner.sh takes them off through the API so
 # the queue stops routing work here during a drain, and the registration itself
 # outlives every stop reason but `terminate` — so a drained node would otherwise
-# come back online carrying only its default labels, and `runs-on: <pool>` would
+# come back online carrying only its default labels, and `runs-on: <label>` would
 # never match it again: healthy-looking, and silently never given another job.
 # POST .../labels adds without replacing, so this is safe to run whether the
 # config.sh above just passed --labels or the registration was already there.
 #
 # Every step fails explicitly, because the caller runs this in a subshell whose
-# failure is only logged: a runner with no label still beats a node that will not
-# start.
-ensure_pool_label() {
+# failure is only logged: a runner with no labels still beats a node that will
+# not start.
+ensure_labels() {
 	github_token=$(token_value) || exit 1
 	api_path=$(github_api_path) || exit 1
 	runner_id=$(find_runner_id) || fail "failed to list runners name=$runner_name"
@@ -218,8 +241,8 @@ ensure_pool_label() {
 		-H "Authorization: token $github_token" \
 		-d "$(label_payload)" \
 		"https://api.github.com/$api_path/actions/runners/$runner_id/labels" ||
-		fail "label request failed name=$runner_name id=$runner_id label=$labels"
-	note "pool label ensured name=$runner_name id=$runner_id label=$labels"
+		fail "label request failed name=$runner_name id=$runner_id labels=$labels"
+	note "labels ensured name=$runner_name id=$runner_id labels=$labels"
 }
 
 # setpriv, never su or runuser: those start a new session, which is what puts an
@@ -254,10 +277,9 @@ work_dir=github-runner
 work_dir=$(CDPATH= cd -- "$work_dir" && pwd)
 cd "$work_dir"
 
-# The runner name is the host name (a pool member is `<pool>-<slot>`). Its label
-# is the pool name, sourced from the `pool.name` x-source (--pool).
+# The runner name is the host name (a pool member is `<pool>-<slot>`). Its labels
+# are --labels, parsed above.
 runner_name=$(hostname)
-labels=$pool
 
 # `.runner` is the file config.sh writes when a directory has been configured; it
 # and the `.credentials` beside it are this node's identity. Absent means the node
@@ -272,7 +294,7 @@ labels=$pool
 # A registration orc8r minted carries its own url — a repository or, in the
 # persistent-org mode, an organization — runner name and labels, and the token in
 # it is already a registration token, so it goes to config.sh as is; the
-# operator's --url, the host name and --pool are not used for it. An absent token
+# operator's --url, the host name and --labels are not used for it. An absent token
 # is not fatal here: a node with `.runner` starts without one, and the PAT
 # registration below fails on it by name.
 credential=$(token_value 2>/dev/null) || credential=
@@ -332,10 +354,10 @@ fi
 if [ "$minted" = yes ]; then
 	note "labels were set at registration; no label upkeep name=$runner_name"
 elif [ -z "$labels" ]; then
-	note "no pool label to ensure name=$runner_name"
+	note "no labels to ensure name=$runner_name"
 else
-	(ensure_pool_label) ||
-		note "could not ensure the pool label; starting without it name=$runner_name label=$labels"
+	(ensure_labels) ||
+		note "could not ensure the labels; starting without them name=$runner_name labels=$labels"
 fi
 
 note "starting the listener name=$runner_name dir=$work_dir"

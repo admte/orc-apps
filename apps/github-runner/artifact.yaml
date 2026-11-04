@@ -32,10 +32,10 @@ config:
           kind: github.runner
           params:
             url: url
-      pool:
+      labels:
         type: string
-        title: Runner label
-        description: Label applied to the runner; sourced from the pool name.
+        title: Runner labels
+        description: Comma-separated labels to register the runner with
         x-source:
           kind: pool.name
   # Downloads and unpacks the runner and nothing else. Registration is the start
@@ -56,9 +56,9 @@ config:
     service: github-runner
     command:
       unix: ["./start-github-runner.sh", "--url=${url}", "--token-file=${token_file}",
-             "--pool=${pool}"]
+             "--labels=${labels}"]
       windows: ["start-github-runner.ps1", "-Url:${url}", "-TokenFile:${token_file}",
-                "-Pool:${pool}"]
+                "-Labels:${labels}"]
   # SIGINT is what the Actions listener reads as "finish this job, then exit", so
   # it is the signal the generated service definition carries. The command has
   # already waited for the job by the time it is sent; the hour is the cap on
@@ -69,9 +69,9 @@ config:
     grace: 30s
     command:
       unix: ["./stop-github-runner.sh", "--url=${url}", "--token-file=${token_file}",
-             "--pool=${pool}"]
+             "--labels=${labels}"]
       windows: ["stop-github-runner.ps1", "-Url:${url}", "-TokenFile:${token_file}",
-                "-Pool:${pool}"]
+                "-Labels:${labels}"]
   # Releases a registration made with a personal access token, and only when the
   # node is ending for good. orc8r removes a registration it minted itself.
   stopped:

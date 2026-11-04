@@ -8,6 +8,6 @@ retired.
 |---|---|---|
 | `url` | yes | Repository or organization to register with, e.g. `https://github.com/org/repo` |
 | `token` | yes | File holding a GitHub token that can register runners for `url` |
-| `pool` | no | Extra label to register the runner with |
+| `labels` | no | Comma-separated labels to register the runner with |
 
 Runs on Linux (amd64, arm64) and Windows (amd64).

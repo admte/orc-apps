@@ -2,24 +2,25 @@
 set -eu
 
 # Quiesce hook: the listener is still running and may be mid-job. With a personal
-# access token, take the pool label off the runner so the queue stops routing work
-# here; in either mode, wait for the worker that is already running to finish,
+# access token, take this app's labels off the runner so the queue stops routing
+# work here; in either mode, wait for the worker that is already running to finish,
 # then exit 0. Stopping the listener is the runtime's next step; deregistering is
 # stopped-github-runner.sh's, and only when the node is going away for good.
 
 usage() {
 	cat <<'USAGE'
-Usage: stop-github-runner.sh [--url=URL] [--token-file=PATH] [--pool=LABEL]
+Usage: stop-github-runner.sh [--url=URL] [--token-file=PATH] [--labels=LIST]
                              [--job-timeout=SECONDS] [--poll-interval=SECONDS]
 
-Drains this node's runner: with a personal access token, takes the pool label
-off so no new job is routed here, then waits for the job in flight to finish.
+Drains this node's runner: with a personal access token, takes the labels off
+so no new job is routed here, then waits for the job in flight to finish.
 Leaves the listener running and the registration in place.
 
   --url=URL                repository or organization URL (personal access token)
   --token-file=PATH        file holding a personal access token or orc8r's
                            minted registration (JSON)
-  --pool=LABEL             label to take off (personal access token)
+  --labels=LIST            comma-separated labels to take off (personal access
+                           token)
   --job-timeout=SECONDS    longest wait for the job in flight (default: 3540)
   --poll-interval=SECONDS  how often to look for it (default: 10)
   --help                   show this help
@@ -37,9 +38,29 @@ usage_error() {
 	exit 2
 }
 
+# Sets labels to the comma-separated list in $1 with the space around each item
+# trimmed and empty items dropped. GitHub refuses a label with a space in it or
+# longer than 256 characters, so such a label stops here.
+parse_labels() {
+	labels=
+	rest=$1,
+	while [ -n "$rest" ]; do
+		item=${rest%%,*}
+		rest=${rest#*,}
+		item=${item#"${item%%[![:space:]]*}"}
+		item=${item%"${item##*[![:space:]]}"}
+		[ -n "$item" ] || continue
+		case $item in
+		*[[:space:][:cntrl:]]*) usage_error "label '$item' contains a space or a control character" ;;
+		esac
+		[ "${#item}" -le 256 ] || usage_error "label '$item' is longer than 256 characters"
+		labels=${labels:+$labels,}$item
+	done
+}
+
 repo_url=
 token_file=
-pool=
+labels_arg=
 # Kept under the 1h stop.timeout so the wait ends with a message of its own
 # rather than being cut off mid-poll.
 job_timeout=3540
@@ -48,7 +69,7 @@ for arg; do
 	case $arg in
 	--url=*) repo_url=${arg#--url=} ;;
 	--token-file=*) token_file=${arg#--token-file=} ;;
-	--pool=*) pool=${arg#--pool=} ;;
+	--labels=*) labels_arg=${arg#--labels=} ;;
 	--job-timeout=*) job_timeout=${arg#--job-timeout=} ;;
 	--poll-interval=*) poll_interval=${arg#--poll-interval=} ;;
 	--help) usage; exit 0 ;;
@@ -61,6 +82,7 @@ esac
 case $poll_interval in
 '' | *[!0-9]* | 0) usage_error "--poll-interval must be a positive whole number of seconds" ;;
 esac
+parse_labels "$labels_arg"
 
 note() {
 	echo "github-runner stop: $*" >&2
@@ -144,6 +166,27 @@ find_runner_id() {
 	return 0
 }
 
+# A label goes into the request path, so it is percent-encoded there: a slash, a
+# question mark or a hash in it would otherwise change the URL.
+url_path_segment() {
+	python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
+}
+
+# Takes each label in $labels off the runner, one request per label. A failure is
+# logged and the rest still go: the wait for the current job below matters more.
+remove_labels() {
+	rest=$labels,
+	while [ -n "$rest" ]; do
+		label=${rest%%,*}
+		rest=${rest#*,}
+		curl -fsSL -X DELETE -o /dev/null \
+			-H "Accept: application/vnd.github+json" \
+			-H "Authorization: token $github_token" \
+			"https://api.github.com/$api_path/actions/runners/$runner_id/labels/$(url_path_segment "$label")" ||
+			note "label removal failed; continuing to wait for the current job name=$runner_name label=$label"
+	done
+}
+
 # A job runs in Runner.Worker, a child the listener spawns out of its own
 # directory; no worker means no job in flight.
 worker_running() {
@@ -163,20 +206,19 @@ fi
 work_dir=$(CDPATH= cd -- "$work_dir" && pwd)
 
 runner_name=$(hostname)
-label=$pool
-# Absent is not fatal: without a credential there is no label to take off, and
+# Absent is not fatal: without a credential there are no labels to take off, and
 # the wait for the current job below still holds.
 credential=$(token_value 2>/dev/null) || credential=
 
 # A minted registration holds no API credential and set its labels when it
-# registered, so there is no label to take off: the runtime's SIGINT, sent once the
-# job below has finished, is what stops the listener taking another.
+# registered, so there are no labels to take off: the runtime's SIGINT, sent once
+# the job below has finished, is what stops the listener taking another.
 if [ -z "$credential" ]; then
 	note "no credential available; skipping the label step name=$runner_name"
 elif is_minted "$credential"; then
-	note "minted registration; no label to remove, relying on the stop signal name=$runner_name"
-elif [ -z "$label" ]; then
-	note "no pool label to remove; relying on the stop signal name=$runner_name"
+	note "minted registration; no labels to remove, relying on the stop signal name=$runner_name"
+elif [ -z "$labels" ]; then
+	note "no labels to remove; relying on the stop signal name=$runner_name"
 else
 	[ -n "$repo_url" ] || fail "--url is required"
 	github_token=$credential
@@ -185,12 +227,8 @@ else
 	if [ -z "$runner_id" ]; then
 		note "runner is not registered; nothing to unlabel name=$runner_name"
 	else
-		note "removing the pool label so no new job is routed here name=$runner_name id=$runner_id label=$label"
-		curl -fsSL -X DELETE -o /dev/null \
-			-H "Accept: application/vnd.github+json" \
-			-H "Authorization: token $github_token" \
-			"https://api.github.com/$api_path/actions/runners/$runner_id/labels/$label" ||
-			note "label removal failed; continuing to wait for the current job name=$runner_name label=$label"
+		note "removing the labels so no new job is routed here name=$runner_name id=$runner_id labels=$labels"
+		remove_labels
 	fi
 fi
 
