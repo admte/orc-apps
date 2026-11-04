@@ -15,11 +15,10 @@ config:
         title: Repository URL
         description: GitHub repository or organization URL to register the runner with
         placeholder: https://github.com/org/repo
-      # Either a personal access token the operator typed, or — when left empty —
-      # a registration orc8r mints from the project's Source Control connection,
-      # delivered as a JSON object in the same file. The scripts tell them apart
-      # by shape. Sensitive, so it reaches a phase only as ${token_file}, a path.
-      # `runtime` because stop and stopped read it after start.
+      # A personal access token, or a runner registration as a JSON object; the
+      # scripts tell them apart by shape. Sensitive, so it reaches a phase only as
+      # ${token_file}, a path. `runtime` because stop and stopped read it after
+      # start.
       token:
         type: string
         title: GitHub token
@@ -37,19 +36,17 @@ config:
         x-source:
           kind: pool.name
   # Downloads and unpacks the runner and nothing else. Registration is the start
-  # phase's, because a pool bake runs install alone and snapshots the disk: an
-  # identity minted here would be baked into a shared image along with the
-  # runner's `.credentials`. It takes no url and no token: the build is the
-  # latest public release whatever the node registers with later.
+  # phase's, so a disk imaged after install carries no runner identity and no
+  # `.credentials`. It takes no url and no token: the build is the latest public
+  # release whatever the runner registers with later.
   install:
     command:
       unix: ["./install-github-runner.sh", "--os=${os}", "--arch=${arch}"]
       windows: ["install-github-runner.ps1", "-Arch:${arch}"]
-  # Runtime-managed service: the node writes the service definition from this
-  # block, so the package never calls svc.sh install or config.cmd
-  # --runasservice. A service survives an agent upgrade or crash, which is what
-  # keeps a build running across one. The script registers, then execs the
-  # listener, so the stop signal reaches the runner itself.
+  # Managed service: the service definition is generated from this block, so the
+  # package never calls svc.sh install or config.cmd --runasservice. The script
+  # registers, then execs the listener, so the stop signal reaches the runner
+  # itself.
   start:
     service: github-runner
     command:
@@ -70,8 +67,8 @@ config:
              "--labels=${labels}"]
       windows: ["stop-github-runner.ps1", "-Url:${url}", "-TokenFile:${token_file}",
                 "-Labels:${labels}"]
-  # Releases a registration made with a personal access token, and only when the
-  # node is ending for good. orc8r removes a registration it minted itself.
+  # Only on stop reason `terminate`: removes a runner registered with a personal
+  # access token from GitHub. A restart or a plain stop keeps the registration.
   stopped:
     timeout: 120s
     command:
