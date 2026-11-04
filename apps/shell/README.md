@@ -1,26 +1,8 @@
 # shell
 
-Multi-platform app that runs an arbitrary command. Defined by a single `artifact.yaml`;
-platform differences (`cmd` media type, `start.command`) come from `platforms[].vars`.
+Runs a command of your choice on the machine, for the one-off setup step no other app covers.
 
-```text
-shell/
-  artifact.yaml    # linux + darwin + windows, amd64 + arm64
-```
+- `cmd` (optional): Command to run: POSIX shell on Linux and macOS, `cmd.exe` syntax on Windows
+- `dir` (optional): Working directory to run it in
 
-| Platforms | `cmd` param syntax |
-|-----------|-------------------|
-| linux, darwin (amd64/arm64) | POSIX shell (`text/x-sh`) |
-| windows (amd64/arm64) | cmd.exe (`text/plain`) |
-
-Build + push (from the repo root, after `./scripts/install.sh` and `./orc login ghcr.io`):
-
-```bash
-./orc build ./apps/shell --push
-```
-
-Override the version tag:
-
-```bash
-./orc build ./apps/shell --tag shell:1.0.1,default --push
-```
+Runs on Linux (amd64, arm64), macOS (amd64, arm64) and Windows (amd64, arm64).

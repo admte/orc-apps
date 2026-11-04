@@ -1,23 +1,8 @@
 # apt
 
-Linux-only app that installs Debian/Ubuntu packages via `apt-get`. Defined by a single
-`artifact.yaml` plus two lifecycle scripts shipped as OCI layers (`files:`).
+Installs the Debian or Ubuntu packages you list, so a machine has the tools your work needs
+without anyone logging in to set it up. The list is applied again every time the app starts.
 
-```text
-apt/
-  artifact.yaml      # linux/amd64
-  install-apt.sh     # validate OS, apt-get, package names
-  start-apt.sh       # apt-get update && install
-```
+- `packages` (required): Space-separated package names, e.g. `git curl htop`
 
-| Param | Description |
-|-------|-------------|
-| `packages` | Space-separated package names (e.g. `git curl htop`) |
-
-Platform: **linux/amd64** only (`apt-get` is Debian/Ubuntu-specific).
-
-Build + push (from the repo root, after `./scripts/install.sh` and `./orc login ghcr.io`):
-
-```bash
-./orc build ./apps/apt --push
-```
+Runs on Linux (amd64, arm64) with `apt-get`.

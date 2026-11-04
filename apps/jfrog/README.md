@@ -1,56 +1,12 @@
 # jfrog
 
-Installs JFrog CLI and configures a JFrog Platform server named `orc`.
+Installs the JFrog CLI so scripts and people on the machine can work with Artifactory and the
+rest of the JFrog Platform. Give it a URL, user and token and the CLI is signed in to that
+server; leave all three out and the CLI is installed ready for you to configure.
 
-```text
-jfrog/
-  artifact.yaml
-  install-jfrog.sh
-  start-jfrog.sh
-  install-jfrog.ps1
-  start-jfrog.ps1
-```
+- `jfrog_url` (optional): JFrog Platform URL, e.g. `https://example.jfrog.io`; give all three
+  together
+- `jfrog_user` (optional): JFrog username
+- `jfrog_token` (optional): JFrog access token for that user
 
-`artifact.yaml` explicitly selects the Unix or PowerShell lifecycle commands. The install
-phase never reads configuration or credentials. The start phase passes the access token to
-JFrog CLI through standard input and stores the resulting CLI configuration.
-JFrog CLI persists the token in its user configuration with owner-only file permissions,
-like AWS CLI persists configured credentials.
-
-## Parameters
-
-- `jfrog_url` - required JFrog Platform base URL.
-- `jfrog_user` - required JFrog username.
-- `jfrog_token` - required sensitive access token with `lifetime: startup`.
-
-ORC supplies the token through `JFROG_TOKEN_FILE`.
-
-## Platforms
-
-- Linux amd64 and arm64.
-- macOS amd64 and arm64.
-- Windows amd64.
-
-## Build
-
-```bash
-./orc build ./apps/jfrog --output /tmp/jfrog-oci
-```
-
-## Manual test
-
-```bash
-tmp=$(mktemp -d)
-JFROG_CLI_INSTALL_DIR="$tmp/bin" sh apps/jfrog/install-jfrog.sh
-
-printf '%s' test-token >"$tmp/token"
-JFROG_CLI_INSTALL_DIR="$tmp/bin" \
-JFROG_CLI_HOME_DIR="$tmp/home" \
-JFROG_URL=https://example.jfrog.io \
-JFROG_USER=test-user \
-JFROG_TOKEN_FILE="$tmp/token" \
-sh apps/jfrog/start-jfrog.sh
-
-JFROG_CLI_HOME_DIR="$tmp/home" "$tmp/bin/jf" config show orc
-rm -rf "$tmp"
-```
+Runs on Linux (amd64, arm64), macOS (amd64, arm64) and Windows (amd64).
