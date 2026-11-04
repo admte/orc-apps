@@ -4,13 +4,13 @@ set -eu
 # Installs the NVIDIA driver from the distribution's own packages and gets the
 # kernel module loaded, rebooting once when it cannot load in place.
 #
-# The pass is idempotent, which is what ends the reboot loop: the runtime runs
-# this script again from the top after a reboot, and a pass that finds the
-# driver loaded, or no NVIDIA GPU at all, is the convergence signal.
+# The script is idempotent: run again after the reboot, it starts from the top,
+# and a pass that finds the driver loaded, or no NVIDIA GPU at all, changes
+# nothing and exits 0.
 #
 # Ubuntu only, for now: it publishes the driver with kernel modules built and
 # signed for its own kernels, so the driver loads with Secure Boot on and no one
-# has to enrol a key at the console during boot — which a node nobody sits at
+# has to enrol a key at the console during boot — which a machine nobody sits at
 # cannot do.
 
 note() {
@@ -75,9 +75,8 @@ esac
 
 gpus=$(nvidia_gpus)
 if [ "$gpus" -eq 0 ]; then
-	# No card to pick a driver for. A pool image is built on the pool's own kind
-	# of machine, so a GPU pool's image is built with the GPU present.
-	note "no NVIDIA GPU on this node; nothing to install"
+	# No card to pick a driver for.
+	note "no NVIDIA GPU on this machine; nothing to install"
 	rm -f "$reboot_marker"
 	exit 0
 fi
@@ -92,18 +91,18 @@ fi
 # shellcheck disable=SC1091
 [ -r /etc/os-release ] && . /etc/os-release
 [ "${ID:-}" = ubuntu ] ||
-	fail "supported on Ubuntu only, which publishes the driver with signed kernel modules; this node runs ${PRETTY_NAME:-an unknown distribution}"
+	fail "supported on Ubuntu only, which publishes the driver with signed kernel modules; this machine runs ${PRETTY_NAME:-an unknown distribution}"
 
 # One reboot, not five: if the module did not load after the reboot this install
-# asked for, another reboot will not change that, and the node should say why.
+# asked for, another reboot will not change that, and the script should say why.
 if [ -f "$reboot_marker" ] && [ "$(cat "$reboot_marker")" != "$(boot_id)" ]; then
 	diagnose
 	fail "the driver is installed but did not load after a reboot"
 fi
 
 export DEBIAN_FRONTEND=noninteractive
-# Ubuntu's needrestart hook reports on stderr after each install, which the
-# node log would show as warnings about services nobody asked to restart.
+# Ubuntu's needrestart hook reports on stderr after each install, which reads as
+# warnings about services nobody asked to restart.
 export NEEDRESTART_SUSPEND=1
 
 note "found $gpus NVIDIA GPU(s); installing the driver Ubuntu recommends for them"
@@ -144,8 +143,8 @@ fi
 mkdir -p "$state_dir"
 boot_id >"$reboot_marker"
 note "the driver loads only after a reboot (nouveau holds the GPU, or the module is for a newer kernel); requesting one"
-# Plain `shutdown -r now`: under the runtime a shim ahead of this on PATH
-# records the request, and the runtime reboots once this pass ends and then
-# runs it again. Run by hand, the machine restarts.
+# Plain `shutdown -r now`, whichever `shutdown` is first on PATH: the machine
+# restarts, and running this script again after the boot confirms the driver
+# loaded.
 shutdown -r now || fail "the driver needs a reboot to load, and the reboot was refused"
 note "reboot requested; the install finishes after it"

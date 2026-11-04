@@ -1,19 +1,19 @@
 #!/bin/sh
 set -eu
 
-# Quiesce hook: the Swarm client is still running and still holds whatever build
-# the controller gave it. Mark the node temporarily offline so the queue stops
-# handing it work, wait until it reports idle, then exit 0 — stopping the service
-# is the runtime's next step, never this script's.
+# Runs before the service is stopped: the Swarm client is still running and still
+# holds whatever build the controller gave it. Mark the node temporarily offline so
+# the queue stops handing it work, wait until it reports idle, then exit 0 —
+# stopping the service comes after, and is never this script's job.
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 AGENT_DIR=${AGENT_DIR:-/var/lib/jenkins-agent}
 PASSWORD_FILE="$AGENT_DIR/jenkins.password"
-# The copy start-jenkins-agent.sh staged for the running agent; the fallback for a
-# stop that was handed no tls_ca of its own.
+# The copy start-jenkins-agent.sh staged for the running agent; the fallback when
+# TLS_CA_FILE is not set for this stop.
 STAGED_CA_PATH="$AGENT_DIR/platform-ca.pem"
-# Kept under the 30m stop.timeout so the wait ends with a message of its own
-# rather than being cut off mid-poll.
+# Just under half an hour, so a stop that is given half an hour ends with a message
+# of its own rather than being cut off mid-poll.
 IDLE_TIMEOUT=${IDLE_TIMEOUT:-1740}
 POLL_INTERVAL=${POLL_INTERVAL:-10}
 
@@ -51,11 +51,10 @@ jenkins_password=$(tr -d '\r\n' <"$PASSWORD_FILE")
 node=$(hostname)
 [ -n "$node" ] || fail "hostname is empty"
 
-# The controller this hook talks to is the one the running agent is connected to, so
-# it verifies against the same chain. TLS_CA_FILE is the runtime's materialization
-# of the param for this phase; the copy start staged is the fallback, which is what
-# answers when the param resolved for start but not for this stop. Neither present
-# means the OS trust store, unchanged.
+# The controller this script talks to is the one the running agent is connected to,
+# so it verifies against the same chain: TLS_CA_FILE when it is set, else the copy
+# start staged, which is what answers when a CA bundle was given to start but not
+# to this stop. Neither present means the OS trust store, unchanged.
 trust_source=""
 if [ -n "${TLS_CA_FILE:-}" ] && [ -s "$TLS_CA_FILE" ]; then
 	trust_source=$TLS_CA_FILE
@@ -66,14 +65,14 @@ if [ -n "$trust_source" ]; then
 	trust_dir=$(mktemp -d)
 	trap 'rm -rf "$trust_dir"' EXIT INT TERM
 	jenkins_trust_init "$trust_source" "$trust_dir/ca-trust.pem"
-	note "verifying the controller against the platform CA source=$trust_source"
+	note "verifying the controller against the supplied CA source=$trust_source"
 fi
 
 jenkins_session_open "$JENKINS_URL" "$JENKINS_USERNAME" "$jenkins_password"
 computer="/computer/$node"
 body="$jenkins_session_dir/body"
 offline_message=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' \
-	"ORC8R node ${APP_STOP_REASON:-stop}")
+	"jenkins-agent ${APP_STOP_REASON:-stop}")
 
 mark_offline() {
 	jenkins_fetch_crumb optional

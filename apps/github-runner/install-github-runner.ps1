@@ -3,9 +3,9 @@
 Downloads the latest GitHub Actions runner release into .\github-runner. Registers nothing.
 
 .DESCRIPTION
-Install phase: downloads and unpacks the runner, and nothing else. It takes no url and no
-token: the build is the latest public release, whichever credential the node later
-registers with, and the runner updates itself from there.
+Downloads and unpacks the runner, and nothing else. It takes no url and no token: the
+build is the latest public release, whichever credential the runner later registers
+with, and the runner updates itself from there.
 
 .PARAMETER Arch
 amd64 or arm64.
@@ -84,10 +84,8 @@ try {
 	Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
 
-# Nothing above may create node identity. A pool bake runs the install phase alone
-# and snapshots the disk, so anything written here is shared by every clone of the
-# image: registering would leave a dead runner on GitHub for a builder that no
-# longer exists, and `config.cmd` writes `.runner` and `.credentials` — the
-# runner's own auth material — into the snapshot. The registration is
-# start-github-runner.ps1's, once per node.
+# Nothing above registers the runner. An installed disk may be imaged and copied to
+# other machines, and `config.cmd` writes `.runner` and `.credentials` — the runner's
+# own auth material — that every copy would then share. Registration is
+# start-github-runner.ps1's, once per machine.
 Write-Host "github-runner install: complete dir=$workDir"

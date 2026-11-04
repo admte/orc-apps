@@ -4,17 +4,17 @@ Runs after the listener has exited; releases the runner only on a terminate.
 
 .DESCRIPTION
 On -StopReason:terminate it releases the registration (personal access token) or drops
-this node's runner identity files (a registration orc8r minted); on any other reason it
-keeps both.
+this machine's runner identity files (a JSON registration); on any other reason it keeps
+both.
 
 .PARAMETER Url
 Repository or organization URL (personal access token).
 
 .PARAMETER TokenFile
-File holding a personal access token or orc8r's minted registration (JSON).
+File holding a personal access token or a runner registration as a JSON object.
 
 .PARAMETER StopReason
-Why the app stopped (default exit).
+Why the runner stopped (default exit).
 
 .PARAMETER Attempts
 Deregistration attempts (default 3).
@@ -36,11 +36,12 @@ $ErrorActionPreference = 'Stop'
 # GitHub accepts nothing older than TLS 1.2.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-# Post-exit hook: the listener is already gone, so GitHub will not refuse the
-# removal as busy. A registration made with a personal access token is released
-# on stop reason `terminate` and on nothing else — a restart or a plain stop
-# leaves this node's runner in place, because the same install starts again
-# against the same registration. One orc8r minted is orc8r's to remove.
+# Runs after the listener has exited, so GitHub will not refuse the removal as
+# busy. A registration made with a personal access token is released on stop
+# reason `terminate` and on nothing else — a restart or a plain stop leaves this
+# machine's runner in place, because the same install starts again against the
+# same registration. A JSON registration carries no credential that could remove
+# it, so only its identity files here are dropped.
 
 if ($Attempts -notmatch '\A[0-9]+\z' -or [int]$Attempts -eq 0) {
 	throw 'github-runner stopped: -Attempts must be a positive whole number'
@@ -58,9 +59,9 @@ function Get-Token {
 	return (Get-Content -Raw -LiteralPath $TokenFile).Trim()
 }
 
-# The token param holds either an operator's personal access token or a
-# registration orc8r minted for this node, a JSON object. They are told apart by
-# shape: a value whose first non-blank character is `{` is the minted credential.
+# The token file holds either a personal access token or a runner registration
+# supplied as a JSON object. They are told apart by shape: a value whose first
+# non-blank character is `{` is the JSON registration.
 function Test-Minted($value) {
 	return [bool]($value -and $value.TrimStart().StartsWith('{'))
 }
@@ -102,16 +103,16 @@ if (-not $credential) {
 	exit 0
 }
 
-# orc8r minted this registration and removes it itself when the node ends; the
-# node holds no credential that could. The identity files go, so a node that
-# somehow starts again registers fresh rather than running a removed identity —
-# what `config.cmd remove` does on the PAT path.
+# A JSON registration comes with no credential that could remove the runner from
+# GitHub, so that is left to whoever holds one. The identity files go, so an
+# install that starts again registers fresh rather than running a removed
+# identity — what `config.cmd remove` does on the PAT path.
 if (Test-Minted $credential) {
-	Write-Host "github-runner stopped: minted registration; orc8r removes it, nothing to deregister here reason=$reason"
+	Write-Host "github-runner stopped: JSON registration; no credential here can remove it, nothing to deregister here reason=$reason"
 	foreach ($file in '.runner', '.credentials', '.credentials_rsaparams') {
 		Remove-Item -Force -LiteralPath (Join-Path $workDir $file) -ErrorAction SilentlyContinue
 	}
-	Write-Host "github-runner stopped: removed this node's runner identity files dir=$workDir"
+	Write-Host "github-runner stopped: removed this machine's runner identity files dir=$workDir"
 	exit 0
 }
 
@@ -126,7 +127,8 @@ try {
 	for ($attempt = 1; $attempt -le $attemptCount; $attempt++) {
 		Write-Host "github-runner stopped: deregistering the runner reason=$reason attempt=$attempt/$attemptCount"
 		try {
-			# A remove token is short-lived, so it is minted per attempt rather than reused.
+			# A remove token is short-lived, so it is requested per attempt rather than
+			# reused.
 			$remove = Invoke-RestMethod -Method Post -Headers $headers `
 				-Uri "https://api.github.com/$apiPath/actions/runners/remove-token"
 			& .\config.cmd remove --token $remove.token

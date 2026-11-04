@@ -6,7 +6,7 @@ fail() {
 	exit 1
 }
 
-# Already installed: nothing to do. Keeps pool-image bakes idempotent.
+# Already installed: nothing to do, so running this again changes nothing.
 if command -v docker >/dev/null 2>&1; then
 	docker --version >&2
 	exit 0

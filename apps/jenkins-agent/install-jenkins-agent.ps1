@@ -1,16 +1,17 @@
 $ErrorActionPreference = 'Stop'
 
-# Install phase: lays out the agent directory, the logging config, the password the
-# Swarm client re-reads on every restart, and a copy of the runner at a fixed path.
+# Lays out the agent directory, the logging config, the password the Swarm client
+# re-reads on every restart, and a copy of the runner at a fixed path.
 #
-# Nothing here contacts the controller and nothing here is node identity. A pool bake
-# runs the install phase alone and snapshots the disk, so everything install writes is
-# shared by every clone of that image; the agent registers itself when the runner
-# connects, under the host name of the node that is actually running.
+# Nothing here contacts the controller or gives the machine an identity. An installed
+# disk may be imaged and copied, so everything install writes may be shared by every
+# copy; the agent registers itself when the runner connects, under the host name of
+# the machine that is actually running.
 #
-# There is no service account and no service registration. On Windows the app runs as
-# the account the runtime runs as — there is no setpriv and no `jenkins` account to
-# drop to — and the node owns the service definition, generating it from `start:`.
+# There is no service account and no service registration. On Windows the agent runs
+# as the account that runs start-jenkins-agent.ps1 — there is no setpriv and no
+# `jenkins` account to drop to — and the service that runs it is defined outside
+# this package.
 
 $agentDir = if ($env:AGENT_DIR) { $env:AGENT_DIR } else { 'C:\ProgramData\jenkins-agent' }
 $runnerDir = if ($env:RUNNER_DIR) { $env:RUNNER_DIR } else { Join-Path $agentDir 'bin' }
@@ -37,8 +38,8 @@ function Write-TextFile($path, $text) {
 	[System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($false)))
 }
 
-# The password outlives the install phase: the sensitive param file is withdrawn once
-# the app has started, while the Swarm client re-reads its password on every service
+# The password is copied into the agent directory: JENKINS_PASSWORD_FILE may be gone
+# by the next start, while the Swarm client re-reads its password on every service
 # restart. Only the accounts that can run the service may read it, so inheritance is
 # dropped and the access rules are rebuilt from well-known SIDs (LocalSystem, the
 # local Administrators group) plus whoever is installing.
@@ -90,9 +91,9 @@ Write-TextFile $passwordFile $jenkinsPassword
 Protect-PasswordFile $passwordFile
 $jenkinsPassword = $null
 
-# The runner lives at a fixed path so the service definition the node writes keeps
-# working regardless of where the app's working directory lands, and so a baked image
-# carries a complete agent.
+# The runner lives at a fixed path so a service that runs start-jenkins-agent.ps1
+# keeps working regardless of where these scripts were unpacked, and so an image of
+# the installed disk carries a complete agent.
 Write-Host "jenkins-agent install: installing the runner path=$runnerPath"
 $runnerSource = Join-Path $PSScriptRoot 'run-jenkins-agent.ps1'
 if (-not (Test-Path -LiteralPath $runnerSource -PathType Leaf)) {

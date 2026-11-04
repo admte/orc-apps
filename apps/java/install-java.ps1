@@ -20,7 +20,7 @@ $api = 'https://api.adoptium.net/v3'
 $selector = "os=windows&architecture=$architecture&image_type=jdk&jvm_impl=hotspot" +
 	'&heap_size=normal&vendor=eclipse&project=jdk'
 
-# APP_VERSION is the release; [X,X.1) resolves its newest build for this node.
+# APP_VERSION is the release; [X,X.1) resolves its newest build for this machine.
 $range = [uri]::EscapeDataString("[$($env:APP_VERSION),$($env:APP_VERSION).1)")
 $names = Invoke-RestMethod -UseBasicParsing -Uri (
 	"$api/info/release_names?release_type=ga&version=$range&$selector" +

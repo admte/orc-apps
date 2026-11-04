@@ -22,7 +22,7 @@ esac
 api=https://api.adoptium.net/v3
 selector="os=linux&architecture=$arch&image_type=jdk&jvm_impl=hotspot&heap_size=normal&vendor=eclipse&project=jdk"
 
-# APP_VERSION is the release; [X,X.1) resolves its newest build for this node.
+# APP_VERSION is the release; [X,X.1) resolves its newest build for this machine.
 range="%5B$APP_VERSION,$APP_VERSION.1%29"
 release=$(curl -fsSL \
 	"$api/info/release_names?release_type=ga&version=$range&$selector&page_size=1&sort_method=DEFAULT&sort_order=DESC" |

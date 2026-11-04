@@ -14,8 +14,8 @@ param(
 	[string]$Labels,
 	[string]$AgentDir,
 	[string]$LogConfigPath,
-	# Optional so an older start script -- one from a package installed before the
-	# tls_ca param existed -- still runs this runner unchanged.
+	# Optional so an older start script -- one from before the CA bundle was an
+	# argument -- still runs this runner unchanged.
 	[string]$CaBundlePath
 )
 
@@ -283,11 +283,11 @@ function Get-PemCertificates($path) {
 	return , $certs
 }
 
-# Adds the platform chain to what this process trusts, for the duration of this
+# Adds the supplied CA chain to what this process trusts, for the duration of this
 # process only.
 #
 # Invoke-WebRequest has no --cacert: its verification is the OS store's, and the
-# platform CA is not in it. A per-process validation callback is the one supported way
+# supplied CA is not in it. A per-process validation callback is the one supported way
 # to add an anchor without writing to LocalMachine\Root, which would need admin, would
 # outlive the app, and would go stale on the next renewal.
 #
@@ -300,7 +300,7 @@ function Get-PemCertificates($path) {
 function Set-PlatformCaTrust($caPath) {
 	$anchors = Get-PemCertificates $caPath
 	if ($anchors.Count -eq 0) {
-		throw "jenkins-agent runner: no certificate in the platform CA bundle: $caPath"
+		throw "jenkins-agent runner: no certificate in the CA bundle: $caPath"
 	}
 	$thumbprints = @{}
 	foreach ($anchor in $anchors) { $thumbprints[$anchor.Thumbprint] = $true }
@@ -341,8 +341,8 @@ function Set-PlatformCaTrust($caPath) {
 	}.GetNewClosure()
 }
 
-# Rebuilds the JVM's truststore: a copy of the JDK's own cacerts with the platform
-# chain added to it.
+# Rebuilds the JVM's truststore: a copy of the JDK's own cacerts with the supplied
+# CA chain added to it.
 #
 # A copy rather than the JDK's cacerts in place, because the runner replaces that
 # whole JDK directory whenever the controller's Java major version changes -- an
@@ -384,14 +384,14 @@ function Build-JavaTrustStore($javaHomeDir, $caPath, $trustStorePath) {
 				$ErrorActionPreference = $previous
 			}
 			if ($LASTEXITCODE -ne 0) {
-				throw "jenkins-agent runner: failed to import the platform CA alias=orc-platform-ca-$imported"
+				throw "jenkins-agent runner: failed to import the supplied CA alias=orc-platform-ca-$imported"
 			}
 		} finally {
 			Remove-Item -Force -LiteralPath $certFile -ErrorAction SilentlyContinue
 		}
 	}
 	if ($imported -eq 0) {
-		throw "jenkins-agent runner: no certificate in the platform CA bundle: $caPath"
+		throw "jenkins-agent runner: no certificate in the CA bundle: $caPath"
 	}
 	Write-Host "jenkins-agent runner: rebuilt the JVM truststore certs=$imported path=$trustStorePath"
 }
@@ -411,21 +411,21 @@ $jenkinsPassword = ([System.IO.File]::ReadAllText($PasswordFile)).Trim([char[]]"
 if (-not $jenkinsPassword) { throw "jenkins-agent runner: password file is empty: $PasswordFile" }
 
 $swarmJarPath = Join-Path $AgentDir 'swarm-client.jar'
-# The JDK's own cacerts plus the platform chain, for the JVM.
+# The JDK's own cacerts plus the supplied CA chain, for the JVM.
 $trustStorePath = Join-Path $AgentDir 'truststore.p12'
 
-# Before the first controller call, and unconditionally on every start: the platform
-# renews its certificates by restarting this app, so the chain staged for this run is
-# the only one that can be trusted to be current. With none supplied, nothing is
+# Before the first controller call, and unconditionally on every start: a renewed
+# chain arrives with a restart, so the chain staged for this run is the only one that
+# can be trusted to be current. With none supplied, nothing is
 # installed and verification stays the OS store's, exactly as it always was.
 if ($CaBundlePath -and (Test-Path -LiteralPath $CaBundlePath -PathType Leaf) -and
 	(Get-Item -LiteralPath $CaBundlePath).Length -gt 0) {
 	Set-PlatformCaTrust $CaBundlePath
-	Write-Host "jenkins-agent runner: verifying the controller against the platform CA path=$CaBundlePath"
+	Write-Host "jenkins-agent runner: verifying the controller against the supplied CA path=$CaBundlePath"
 } else {
 	$CaBundlePath = ''
 	Remove-Item -Force -LiteralPath $trustStorePath -ErrorAction SilentlyContinue
-	Write-Host 'jenkins-agent runner: no platform CA supplied; verifying against the OS trust store'
+	Write-Host 'jenkins-agent runner: no CA bundle supplied; verifying against the OS trust store'
 }
 
 Open-JenkinsSession $JenkinsUrl $JenkinsUsername $jenkinsPassword
@@ -446,16 +446,16 @@ if ($CaBundlePath) {
 Update-SwarmClientJar $swarmJarPath
 
 # -retry/-retryInterval keep the client reconnecting across a controller restart
-# instead of exiting; the app is not failed for an outage it is expected to ride out.
+# instead of exiting; an outage it is expected to ride out does not end the service.
 # -noRetryAfterConnected is deliberately absent: it turns a dropped connection into an
-# exit. Windows has no exec, so the JVM runs as a child of this script — the service
-# shim ends the whole process tree, so the stop still reaches it.
+# exit. Windows has no exec, so the JVM runs as a child of this script — a service
+# stop that ends the whole process tree still reaches it.
 #
 # The JVM does not read the OS trust store; it reads a truststore of its own, so the
-# validation callback above does nothing for the Swarm client. When the platform
-# handed us a chain, the client is pointed at the rebuilt copy of the JDK's cacerts
-# that carries it -- otherwise at nothing, and the JDK's own default applies. No flag
-# here weakens verification.
+# validation callback above does nothing for the Swarm client. When a CA chain was
+# supplied, the client is pointed at the rebuilt copy of the JDK's cacerts that
+# carries it -- otherwise at nothing, and the JDK's own default applies. No flag here
+# weakens verification.
 $trustArgs = @()
 if ($CaBundlePath) {
 	$trustArgs = @(

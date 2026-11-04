@@ -1,17 +1,17 @@
 $ErrorActionPreference = 'Stop'
 
-# Quiesce hook: the Swarm client is still running and still holds whatever build the
-# controller gave it. Mark the node temporarily offline so the queue stops handing it
-# work, wait until it reports idle, then exit 0 — stopping the service is the
-# runtime's next step, never this script's.
+# Runs before the service is stopped: the Swarm client is still running and still
+# holds whatever build the controller gave it. Mark the node temporarily offline so
+# the queue stops handing it work, wait until it reports idle, then exit 0 —
+# stopping the service comes after, and is never this script's job.
 
 $agentDir = if ($env:AGENT_DIR) { $env:AGENT_DIR } else { 'C:\ProgramData\jenkins-agent' }
 $passwordFile = Join-Path $agentDir 'jenkins.password'
-# The copy start-jenkins-agent.ps1 staged for the running agent; the fallback for a
-# stop that was handed no tls_ca of its own.
+# The copy start-jenkins-agent.ps1 staged for the running agent; the fallback when
+# TLS_CA_FILE is not set for this stop.
 $stagedCaPath = Join-Path $agentDir 'platform-ca.pem'
-# Kept under the 30m stop.timeout so the wait ends with a message of its own rather
-# than being cut off mid-poll.
+# Just under half an hour, so a stop that is given half an hour ends with a message
+# of its own rather than being cut off mid-poll.
 $idleTimeout = if ($env:IDLE_TIMEOUT) { [int]$env:IDLE_TIMEOUT } else { 1740 }
 $pollInterval = if ($env:POLL_INTERVAL) { [int]$env:POLL_INTERVAL } else { 10 }
 
@@ -130,7 +130,7 @@ function Get-PemCertificates($path) {
 	return , $certs
 }
 
-# Adds the platform chain to what this process trusts, for the duration of this
+# Adds the supplied CA chain to what this process trusts, for the duration of this
 # process only. The runner's twin, and held to the same rule: strictly additive, and
 # never a bypass. A certificate is accepted only when the OS already validated it, or
 # when the chain rebuilds cleanly and terminates at one of the supplied anchors; a
@@ -138,7 +138,7 @@ function Get-PemCertificates($path) {
 function Set-PlatformCaTrust($caPath) {
 	$anchors = Get-PemCertificates $caPath
 	if ($anchors.Count -eq 0) {
-		throw "jenkins-agent stop: no certificate in the platform CA bundle: $caPath"
+		throw "jenkins-agent stop: no certificate in the CA bundle: $caPath"
 	}
 	$thumbprints = @{}
 	foreach ($anchor in $anchors) { $thumbprints[$anchor.Thumbprint] = $true }
@@ -189,11 +189,10 @@ if (-not $jenkinsPassword) { throw "jenkins-agent stop: password file is empty: 
 $node = $env:COMPUTERNAME
 if (-not $node) { throw 'jenkins-agent stop: host name is empty' }
 
-# The controller this hook talks to is the one the running agent is connected to, so
-# it verifies against the same chain. TLS_CA_FILE is the runtime's materialization
-# of the param for this phase; the copy start staged is the fallback, which is what
-# answers when the param resolved for start but not for this stop. Neither present
-# means the OS trust store, unchanged.
+# The controller this script talks to is the one the running agent is connected to,
+# so it verifies against the same chain: TLS_CA_FILE when it is set, else the copy
+# start staged, which is what answers when a CA bundle was given to start but not
+# to this stop. Neither present means the OS trust store, unchanged.
 $trustSource = ''
 if ($env:TLS_CA_FILE -and (Test-Path -LiteralPath $env:TLS_CA_FILE -PathType Leaf) -and
 	(Get-Item -LiteralPath $env:TLS_CA_FILE).Length -gt 0) {
@@ -204,14 +203,14 @@ if ($env:TLS_CA_FILE -and (Test-Path -LiteralPath $env:TLS_CA_FILE -PathType Lea
 }
 if ($trustSource) {
 	Set-PlatformCaTrust $trustSource
-	Write-Host "jenkins-agent stop: verifying the controller against the platform CA source=$trustSource"
+	Write-Host "jenkins-agent stop: verifying the controller against the supplied CA source=$trustSource"
 }
 
 Open-JenkinsSession $env:JENKINS_URL $env:JENKINS_USERNAME $jenkinsPassword
 $jenkinsPassword = $null
 $computer = "/computer/$node"
 $reason = if ($env:APP_STOP_REASON) { $env:APP_STOP_REASON } else { 'stop' }
-$offlineMessage = [System.Uri]::EscapeDataString("ORC8R node $reason")
+$offlineMessage = [System.Uri]::EscapeDataString("jenkins-agent $reason")
 
 function Set-AgentOffline($computer, $offlineMessage) {
 	Update-JenkinsCrumb
