@@ -1,50 +1,32 @@
+<#
+.SYNOPSIS
+Downloads the latest GitHub Actions runner release into .\github-runner. Registers nothing.
+
+.DESCRIPTION
+Install phase: downloads and unpacks the runner, and nothing else. It takes no url and no
+token: the build is the latest public release, whichever credential the node later
+registers with, and the runner updates itself from there.
+
+.PARAMETER Arch
+amd64 or arm64.
+#>
+[CmdletBinding()]
+param(
+	[string]$Arch = ''
+)
+
 $ErrorActionPreference = 'Stop'
 # Windows PowerShell on Server 2016 offers only TLS 1.0 and 1.1 by default, and
 # GitHub accepts nothing older than TLS 1.2.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-# Returns the token value, or nothing when none was delivered: install needs a
-# credential only to ask GitHub's downloads API, and has a public path without one.
-function Get-Token {
-	if ($env:TOKEN_FILE) {
-		return (Get-Content -Raw -LiteralPath $env:TOKEN_FILE).Trim()
-	}
-	if ($env:TOKEN) {
-		return $env:TOKEN.Trim()
-	}
-	return ''
-}
-
-# The token param holds either an operator's personal access token or a
-# registration orc8r minted for this node, a JSON object. They are told apart by
-# shape: a value whose first non-blank character is `{` is the minted credential.
-function Test-Minted($value) {
-	return [bool]($value -and $value.TrimStart().StartsWith('{'))
-}
-
-function Get-GitHubApiPath {
-	if (-not $env:URL -or -not $env:URL.StartsWith('https://github.com/')) {
-		throw 'URL must start with https://github.com/'
-	}
-	$path = $env:URL.Substring('https://github.com/'.Length).TrimEnd('/')
-	if ($path.EndsWith('.git')) {
-		$path = $path.Substring(0, $path.Length - 4)
-	}
-	$parts = $path.Split('/', 2)
-	if (-not $parts[0]) {
-		throw 'GitHub owner is required'
-	}
-	if ($parts.Length -eq 2 -and $parts[1]) {
-		return "repos/$($parts[0])/$($parts[1])"
-	}
-	return "orgs/$($parts[0])"
-}
-
-function Get-RunnerArch {
-	switch ($env:PROCESSOR_ARCHITECTURE) {
-		'AMD64' { return 'x64' }
-		'ARM64' { return 'arm64' }
-		default { throw "unsupported architecture $env:PROCESSOR_ARCHITECTURE" }
+# The name GitHub's runner archives use for this architecture.
+function Get-RunnerArch($arch) {
+	switch -CaseSensitive ($arch) {
+		'amd64' { return 'x64' }
+		'arm64' { return 'arm64' }
+		'' { throw 'github-runner install: -Arch is required' }
+		default { throw "github-runner install: unsupported architecture $arch" }
 	}
 }
 
@@ -70,31 +52,17 @@ function Select-ReleaseAsset($release, $arch) {
 	}
 }
 
-$githubToken = Get-Token
+$runnerArch = Get-RunnerArch $Arch
 $workDir = 'github-runner'
 
 New-Item -ItemType Directory -Force -Path $workDir | Out-Null
 
-# The runner self-updates afterward, so no version pinning on either path.
-$arch = Get-RunnerArch
-if ($githubToken -and -not (Test-Minted $githubToken)) {
-	# A personal access token: ask GitHub which runner build its service currently
-	# wants for this registration target.
-	$apiPath = Get-GitHubApiPath
-	$downloads = Invoke-RestMethod -Headers @{
-		Accept        = 'application/vnd.github+json'
-		Authorization = "token $githubToken"
-	} -Uri "https://api.github.com/$apiPath/actions/runners/downloads"
-	$selected = $downloads | Where-Object { $_.os -eq 'win' -and $_.architecture -eq $arch } | Select-Object -First 1
-} else {
-	# A minted registration, or none delivered yet: install holds no API
-	# credential, so it takes the latest release from GitHub's public metadata.
-	Write-Host 'github-runner install: no API token; using the latest public runner release'
-	$release = Invoke-RestMethod -Headers @{ Accept = 'application/vnd.github+json' } `
-		-Uri 'https://api.github.com/repos/actions/runner/releases/latest'
-	$selected = Select-ReleaseAsset $release $arch
-}
-if (-not $selected) { throw "no runner download for win/$arch" }
+# The runner self-updates afterward, so no version pinning. GitHub's public release
+# metadata needs no credential, which is why install takes none.
+$release = Invoke-RestMethod -Headers @{ Accept = 'application/vnd.github+json' } `
+	-Uri 'https://api.github.com/repos/actions/runner/releases/latest'
+$selected = Select-ReleaseAsset $release $runnerArch
+if (-not $selected) { throw "no runner download for win/$runnerArch" }
 $archive = $selected.filename
 $tmp = New-Item -ItemType Directory -Force -Path (Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString()))
 

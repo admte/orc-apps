@@ -1,3 +1,36 @@
+<#
+.SYNOPSIS
+Runs after the listener has exited; releases the runner only on a terminate.
+
+.DESCRIPTION
+On -StopReason:terminate it releases the registration (personal access token) or drops
+this node's runner identity files (a registration orc8r minted); on any other reason it
+keeps both.
+
+.PARAMETER Url
+Repository or organization URL (personal access token).
+
+.PARAMETER TokenFile
+File holding a personal access token or orc8r's minted registration (JSON).
+
+.PARAMETER StopReason
+Why the app stopped (default exit).
+
+.PARAMETER Attempts
+Deregistration attempts (default 3).
+
+.PARAMETER RetryInterval
+Pause between attempts, in seconds (default 5).
+#>
+[CmdletBinding()]
+param(
+	[string]$Url = '',
+	[string]$TokenFile = '',
+	[string]$StopReason = 'exit',
+	[string]$Attempts = '3',
+	[string]$RetryInterval = '5'
+)
+
 $ErrorActionPreference = 'Stop'
 # Windows PowerShell on Server 2016 offers only TLS 1.0 and 1.1 by default, and
 # GitHub accepts nothing older than TLS 1.2.
@@ -5,21 +38,24 @@ $ErrorActionPreference = 'Stop'
 
 # Post-exit hook: the listener is already gone, so GitHub will not refuse the
 # removal as busy. A registration made with a personal access token is released
-# on APP_STOP_REASON=terminate and on nothing else — a restart or a plain stop
+# on stop reason `terminate` and on nothing else — a restart or a plain stop
 # leaves this node's runner in place, because the same install starts again
 # against the same registration. One orc8r minted is orc8r's to remove.
 
-$attempts = if ($env:ATTEMPTS) { [int]$env:ATTEMPTS } else { 3 }
-$retryInterval = if ($env:RETRY_INTERVAL) { [int]$env:RETRY_INTERVAL } else { 5 }
+if ($Attempts -notmatch '\A[0-9]+\z' -or [int]$Attempts -eq 0) {
+	throw 'github-runner stopped: -Attempts must be a positive whole number'
+}
+if ($RetryInterval -notmatch '\A[0-9]+\z') {
+	throw 'github-runner stopped: -RetryInterval must be a whole number of seconds'
+}
+$attemptCount = [int]$Attempts
+$retrySeconds = [int]$RetryInterval
 
 function Get-Token {
-	if ($env:TOKEN_FILE) {
-		return (Get-Content -Raw -LiteralPath $env:TOKEN_FILE).Trim()
+	if (-not $TokenFile) {
+		throw 'github-runner stopped: -TokenFile is required'
 	}
-	if ($env:TOKEN) {
-		return $env:TOKEN.Trim()
-	}
-	throw 'TOKEN_FILE or TOKEN is required'
+	return (Get-Content -Raw -LiteralPath $TokenFile).Trim()
 }
 
 # The token param holds either an operator's personal access token or a
@@ -30,10 +66,10 @@ function Test-Minted($value) {
 }
 
 function Get-GitHubApiPath {
-	if (-not $env:URL -or -not $env:URL.StartsWith('https://github.com/')) {
-		throw 'URL must start with https://github.com/'
+	if (-not $Url -or -not $Url.StartsWith('https://github.com/')) {
+		throw 'github-runner stopped: -Url must start with https://github.com/'
 	}
-	$path = $env:URL.Substring('https://github.com/'.Length).TrimEnd('/')
+	$path = $Url.Substring('https://github.com/'.Length).TrimEnd('/')
 	if ($path.EndsWith('.git')) {
 		$path = $path.Substring(0, $path.Length - 4)
 	}
@@ -47,7 +83,7 @@ function Get-GitHubApiPath {
 	return "orgs/$($parts[0])"
 }
 
-$reason = if ($env:APP_STOP_REASON) { $env:APP_STOP_REASON } else { 'exit' }
+$reason = $StopReason
 if ($reason -ne 'terminate') {
 	Write-Host "github-runner stopped: keeping the runner registration reason=$reason"
 	exit 0
@@ -79,13 +115,16 @@ if (Test-Minted $credential) {
 	exit 0
 }
 
+if (-not $Url) {
+	throw 'github-runner stopped: -Url is required'
+}
 $headers = @{ Accept = 'application/vnd.github+json'; Authorization = "token $credential" }
 $apiPath = Get-GitHubApiPath
 
 Push-Location $workDir
 try {
-	for ($attempt = 1; $attempt -le $attempts; $attempt++) {
-		Write-Host "github-runner stopped: deregistering the runner reason=$reason attempt=$attempt/$attempts"
+	for ($attempt = 1; $attempt -le $attemptCount; $attempt++) {
+		Write-Host "github-runner stopped: deregistering the runner reason=$reason attempt=$attempt/$attemptCount"
 		try {
 			# A remove token is short-lived, so it is minted per attempt rather than reused.
 			$remove = Invoke-RestMethod -Method Post -Headers $headers `
@@ -97,11 +136,11 @@ try {
 			Write-Host "github-runner stopped: runner deregistered reason=$reason"
 			exit 0
 		} catch {
-			if ($attempt -ge $attempts) {
-				throw "github-runner stopped: failed to deregister the runner after $attempts attempts: $_"
+			if ($attempt -ge $attemptCount) {
+				throw "github-runner stopped: failed to deregister the runner after $attemptCount attempts: $_"
 			}
-			Write-Host "github-runner stopped: deregistration attempt failed; retrying attempt=$attempt/$attempts"
-			Start-Sleep -Seconds $retryInterval
+			Write-Host "github-runner stopped: deregistration attempt failed; retrying attempt=$attempt/$attemptCount"
+			Start-Sleep -Seconds $retrySeconds
 		}
 	}
 } finally {
