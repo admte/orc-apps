@@ -177,8 +177,8 @@ builds format v2:
 ./orc build ./apps/github-runner --push
 ```
 
-This publishes `github-runner:2.0.0`; `default` stays on the v1 package until the zone's hosts
-run v2, so a pool pins `github-runner:2.0.0` until then. Validate locally without pushing:
+This publishes `github-runner:default`. Publish it to a zone only once that zone's servers and
+hosts run app format v2; an older agent is refused it by name. Validate locally without pushing:
 
 ```bash
 ./orc build ./apps/github-runner --output /tmp/github-runner-oci
