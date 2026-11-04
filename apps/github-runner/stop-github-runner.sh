@@ -7,15 +7,60 @@ set -eu
 # then exit 0. Stopping the listener is the runtime's next step; deregistering is
 # stopped-github-runner.sh's, and only when the node is going away for good.
 
-# Kept under the 1h stop.timeout so the wait ends with a message of its own
-# rather than being cut off mid-poll.
-JOB_TIMEOUT=${JOB_TIMEOUT:-3540}
-POLL_INTERVAL=${POLL_INTERVAL:-10}
+usage() {
+	cat <<'USAGE'
+Usage: stop-github-runner.sh [--url=URL] [--token-file=PATH] [--pool=LABEL]
+                             [--job-timeout=SECONDS] [--poll-interval=SECONDS]
+
+Drains this node's runner: with a personal access token, takes the pool label
+off so no new job is routed here, then waits for the job in flight to finish.
+Leaves the listener running and the registration in place.
+
+  --url=URL                repository or organization URL (personal access token)
+  --token-file=PATH        file holding a personal access token or orc8r's
+                           minted registration (JSON)
+  --pool=LABEL             label to take off (personal access token)
+  --job-timeout=SECONDS    longest wait for the job in flight (default: 3540)
+  --poll-interval=SECONDS  how often to look for it (default: 10)
+  --help                   show this help
+USAGE
+}
 
 fail() {
 	echo "github-runner stop: $*" >&2
 	exit 1
 }
+
+usage_error() {
+	echo "github-runner stop: $*" >&2
+	usage >&2
+	exit 2
+}
+
+repo_url=
+token_file=
+pool=
+# Kept under the 1h stop.timeout so the wait ends with a message of its own
+# rather than being cut off mid-poll.
+job_timeout=3540
+poll_interval=10
+for arg; do
+	case $arg in
+	--url=*) repo_url=${arg#--url=} ;;
+	--token-file=*) token_file=${arg#--token-file=} ;;
+	--pool=*) pool=${arg#--pool=} ;;
+	--job-timeout=*) job_timeout=${arg#--job-timeout=} ;;
+	--poll-interval=*) poll_interval=${arg#--poll-interval=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+case $job_timeout in
+'' | *[!0-9]*) usage_error "--job-timeout must be a whole number of seconds" ;;
+esac
+case $poll_interval in
+'' | *[!0-9]* | 0) usage_error "--poll-interval must be a positive whole number of seconds" ;;
+esac
 
 note() {
 	echo "github-runner stop: $*" >&2
@@ -26,13 +71,8 @@ need() {
 }
 
 token_value() {
-	if [ -n "${TOKEN_FILE:-}" ]; then
-		tr -d '\r\n' <"$TOKEN_FILE"
-	elif [ -n "${TOKEN:-}" ]; then
-		printf '%s' "$TOKEN"
-	else
-		fail "TOKEN_FILE or TOKEN is required"
-	fi
+	[ -n "$token_file" ] || fail "--token-file is required"
+	tr -d '\r\n' <"$token_file"
 }
 
 # The token param holds either an operator's personal access token or a
@@ -47,12 +87,11 @@ is_minted() {
 }
 
 github_api_path() {
-	url=${URL:-}
-	case "$url" in
+	case "$repo_url" in
 	https://github.com/*) ;;
-	*) fail "URL must start with https://github.com/" ;;
+	*) fail "--url must start with https://github.com/" ;;
 	esac
-	path=${url#https://github.com/}
+	path=${repo_url#https://github.com/}
 	path=${path%.git}
 	path=${path%/}
 	owner=${path%%/*}
@@ -124,7 +163,7 @@ fi
 work_dir=$(CDPATH= cd -- "$work_dir" && pwd)
 
 runner_name=$(hostname)
-label=${POOL:-}
+label=$pool
 # Absent is not fatal: without a credential there is no label to take off, and
 # the wait for the current job below still holds.
 credential=$(token_value 2>/dev/null) || credential=
@@ -139,7 +178,7 @@ elif is_minted "$credential"; then
 elif [ -z "$label" ]; then
 	note "no pool label to remove; relying on the stop signal name=$runner_name"
 else
-	[ -n "${URL:-}" ] || fail "URL is required"
+	[ -n "$repo_url" ] || fail "--url is required"
 	github_token=$credential
 	api_path=$(github_api_path)
 	runner_id=$(find_runner_id) || fail "failed to list runners name=$runner_name"
@@ -160,14 +199,14 @@ if ! worker_running; then
 	exit 0
 fi
 
-note "waiting for the current job to finish name=$runner_name timeout=${JOB_TIMEOUT}s"
+note "waiting for the current job to finish name=$runner_name timeout=${job_timeout}s"
 waited=0
 while worker_running; do
-	if [ "$waited" -ge "$JOB_TIMEOUT" ]; then
-		fail "job was still running after ${JOB_TIMEOUT}s name=$runner_name"
+	if [ "$waited" -ge "$job_timeout" ]; then
+		fail "job was still running after ${job_timeout}s name=$runner_name"
 	fi
-	sleep "$POLL_INTERVAL"
-	waited=$((waited + POLL_INTERVAL))
+	sleep "$poll_interval"
+	waited=$((waited + poll_interval))
 done
 
 note "job finished; safe to stop name=$runner_name waited=${waited}s"

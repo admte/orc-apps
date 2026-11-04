@@ -10,12 +10,50 @@ set -eu
 # unconfigured; this script gives the running node its own identity, then becomes
 # the listener.
 
-SERVICE_USER=${SERVICE_USER:-ghrunner}
+usage() {
+	cat <<'USAGE'
+Usage: start-github-runner.sh [--url=URL] [--token-file=PATH] [--pool=LABEL]
+                              [--service-user=NAME]
+
+Registers this node's runner if it has no identity yet, then becomes the
+listener. Run as root from the directory install ran in.
+
+  --url=URL            repository or organization URL; used with a personal
+                       access token, ignored for a registration orc8r minted
+  --token-file=PATH    file holding a personal access token or orc8r's minted
+                       registration (JSON); optional when already registered
+  --pool=LABEL         label the runner carries with a personal access token
+  --service-user=NAME  account the listener runs as (default: ghrunner)
+  --help               show this help
+USAGE
+}
 
 fail() {
 	echo "github-runner start: $*" >&2
 	exit 1
 }
+
+usage_error() {
+	echo "github-runner start: $*" >&2
+	usage >&2
+	exit 2
+}
+
+repo_url=
+token_file=
+pool=
+service_user=ghrunner
+for arg; do
+	case $arg in
+	--url=*) repo_url=${arg#--url=} ;;
+	--token-file=*) token_file=${arg#--token-file=} ;;
+	--pool=*) pool=${arg#--pool=} ;;
+	--service-user=*) service_user=${arg#--service-user=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+[ -n "$service_user" ] || usage_error "--service-user must not be empty"
 
 note() {
 	echo "github-runner start: $*" >&2
@@ -30,13 +68,8 @@ json_field() {
 }
 
 token_value() {
-	if [ -n "${TOKEN_FILE:-}" ]; then
-		tr -d '\r\n' <"$TOKEN_FILE"
-	elif [ -n "${TOKEN:-}" ]; then
-		printf '%s' "$TOKEN"
-	else
-		fail "TOKEN_FILE or TOKEN is required"
-	fi
+	[ -n "$token_file" ] || fail "--token-file is required"
+	tr -d '\r\n' <"$token_file"
 }
 
 # The token param holds either an operator's personal access token or a
@@ -100,12 +133,11 @@ print("\n".join(fields))
 }
 
 github_api_path() {
-	url=${URL:-}
-	case "$url" in
+	case "$repo_url" in
 	https://github.com/*) ;;
-	*) fail "URL must start with https://github.com/" ;;
+	*) fail "--url must start with https://github.com/" ;;
 	esac
-	path=${url#https://github.com/}
+	path=${repo_url#https://github.com/}
 	path=${path%.git}
 	path=${path%/}
 	owner=${path%%/*}
@@ -207,7 +239,7 @@ except Exception:
 }
 
 as_service_user() {
-	setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_USER" --init-groups \
+	setpriv --reuid="$service_user" --regid="$service_user" --init-groups \
 		env HOME="$work_dir" "$@"
 }
 
@@ -223,9 +255,9 @@ work_dir=$(CDPATH= cd -- "$work_dir" && pwd)
 cd "$work_dir"
 
 # The runner name is the host name (a pool member is `<pool>-<slot>`). Its label
-# is the pool name, sourced from the `pool.name` x-source (env POOL).
+# is the pool name, sourced from the `pool.name` x-source (--pool).
 runner_name=$(hostname)
-labels=${POOL:-}
+labels=$pool
 
 # `.runner` is the file config.sh writes when a directory has been configured; it
 # and the `.credentials` beside it are this node's identity. Absent means the node
@@ -240,7 +272,7 @@ labels=${POOL:-}
 # A registration orc8r minted carries its own url — a repository or, in the
 # persistent-org mode, an organization — runner name and labels, and the token in
 # it is already a registration token, so it goes to config.sh as is; the
-# operator's URL, the host name and POOL are not used for it. An absent token
+# operator's --url, the host name and --pool are not used for it. An absent token
 # is not fatal here: a node with `.runner` starts without one, and the PAT
 # registration below fails on it by name.
 credential=$(token_value 2>/dev/null) || credential=
@@ -267,10 +299,10 @@ elif [ "$minted" = yes ]; then
 	set -- --unattended --url "$minted_url" --token "$minted_token" --name "$runner_name" \
 		--no-default-labels --labels "$labels" --replace
 
-	note "registering with the minted registration name=$runner_name labels=$labels user=$SERVICE_USER"
+	note "registering with the minted registration name=$runner_name labels=$labels user=$service_user"
 	as_service_user ./config.sh "$@"
 else
-	[ -n "${URL:-}" ] || fail "URL is required"
+	[ -n "$repo_url" ] || fail "--url is required"
 	github_token=$(token_value)
 	api_path=$(github_api_path)
 
@@ -284,12 +316,12 @@ else
 	registration_token=$(printf '%s' "$registration_json" | json_field token)
 	[ -n "$registration_token" ] || fail "failed to create registration token"
 
-	set -- --name "$runner_name" --url "$URL" --token "$registration_token" --unattended --replace
+	set -- --name "$runner_name" --url "$repo_url" --token "$registration_token" --unattended --replace
 	if [ -n "$labels" ]; then
 		set -- "$@" --labels "$labels"
 	fi
 
-	note "registering name=$runner_name labels=$labels user=$SERVICE_USER"
+	note "registering name=$runner_name labels=$labels user=$service_user"
 	as_service_user ./config.sh "$@"
 fi
 
@@ -307,5 +339,5 @@ else
 fi
 
 note "starting the listener name=$runner_name dir=$work_dir"
-exec setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_USER" --init-groups \
+exec setpriv --reuid="$service_user" --regid="$service_user" --init-groups \
 	env HOME="$work_dir" ./run.sh
