@@ -1,3 +1,37 @@
+<#
+.SYNOPSIS
+Drains this node's runner, then exits 0 with the listener still running.
+
+.DESCRIPTION
+With a personal access token, takes the pool label off so no new job is routed here; in
+either mode, waits for the job in flight to finish. Leaves the registration in place.
+
+.PARAMETER Url
+Repository or organization URL (personal access token).
+
+.PARAMETER TokenFile
+File holding a personal access token or orc8r's minted registration (JSON).
+
+.PARAMETER Pool
+Label to take off (personal access token).
+
+.PARAMETER JobTimeout
+Longest wait for the job in flight, in seconds (default 3540).
+
+.PARAMETER PollInterval
+How often to look for it, in seconds (default 10).
+#>
+[CmdletBinding()]
+param(
+	[string]$Url = '',
+	[string]$TokenFile = '',
+	[string]$Pool = '',
+	# Kept under the 1h stop.timeout so the wait ends with a message of its own
+	# rather than being cut off mid-poll.
+	[string]$JobTimeout = '3540',
+	[string]$PollInterval = '10'
+)
+
 $ErrorActionPreference = 'Stop'
 # Windows PowerShell on Server 2016 offers only TLS 1.0 and 1.1 by default, and
 # GitHub accepts nothing older than TLS 1.2.
@@ -9,19 +43,20 @@ $ErrorActionPreference = 'Stop'
 # then exit 0. Stopping the listener is the runtime's next step; deregistering is
 # stopped-github-runner.ps1's, and only when the node is going away for good.
 
-# Kept under the 1h stop.timeout so the wait ends with a message of its own
-# rather than being cut off mid-poll.
-$jobTimeout = if ($env:JOB_TIMEOUT) { [int]$env:JOB_TIMEOUT } else { 3540 }
-$pollInterval = if ($env:POLL_INTERVAL) { [int]$env:POLL_INTERVAL } else { 10 }
+if ($JobTimeout -notmatch '\A[0-9]+\z') {
+	throw 'github-runner stop: -JobTimeout must be a whole number of seconds'
+}
+if ($PollInterval -notmatch '\A[0-9]+\z' -or [int]$PollInterval -eq 0) {
+	throw 'github-runner stop: -PollInterval must be a positive whole number of seconds'
+}
+$jobTimeoutSeconds = [int]$JobTimeout
+$pollSeconds = [int]$PollInterval
 
 function Get-Token {
-	if ($env:TOKEN_FILE) {
-		return (Get-Content -Raw -LiteralPath $env:TOKEN_FILE).Trim()
+	if (-not $TokenFile) {
+		throw 'github-runner stop: -TokenFile is required'
 	}
-	if ($env:TOKEN) {
-		return $env:TOKEN.Trim()
-	}
-	throw 'TOKEN_FILE or TOKEN is required'
+	return (Get-Content -Raw -LiteralPath $TokenFile).Trim()
 }
 
 # The token param holds either an operator's personal access token or a
@@ -32,10 +67,10 @@ function Test-Minted($value) {
 }
 
 function Get-GitHubApiPath {
-	if (-not $env:URL -or -not $env:URL.StartsWith('https://github.com/')) {
-		throw 'URL must start with https://github.com/'
+	if (-not $Url -or -not $Url.StartsWith('https://github.com/')) {
+		throw 'github-runner stop: -Url must start with https://github.com/'
 	}
-	$path = $env:URL.Substring('https://github.com/'.Length).TrimEnd('/')
+	$path = $Url.Substring('https://github.com/'.Length).TrimEnd('/')
 	if ($path.EndsWith('.git')) {
 		$path = $path.Substring(0, $path.Length - 4)
 	}
@@ -87,7 +122,7 @@ if (-not (Test-Path (Join-Path $workDir 'config.cmd'))) {
 $workDir = (Resolve-Path $workDir).Path
 
 $runnerName = $env:COMPUTERNAME
-$label = $env:POOL
+$label = $Pool
 # Absent is not fatal: without a credential there is no label to take off, and
 # the wait for the current job below still holds.
 try { $credential = Get-Token } catch { $credential = '' }
@@ -102,6 +137,9 @@ if (-not $credential) {
 } elseif (-not $label) {
 	Write-Host "github-runner stop: no pool label to remove; relying on the service stop name=$runnerName"
 } else {
+	if (-not $Url) {
+		throw 'github-runner stop: -Url is required'
+	}
 	$headers = @{ Accept = 'application/vnd.github+json'; Authorization = "token $credential" }
 	$apiPath = Get-GitHubApiPath
 	$runnerId = Find-RunnerId $apiPath $headers $runnerName
@@ -123,14 +161,14 @@ if (-not (Test-WorkerRunning $workDir)) {
 	exit 0
 }
 
-Write-Host "github-runner stop: waiting for the current job to finish name=$runnerName timeout=${jobTimeout}s"
+Write-Host "github-runner stop: waiting for the current job to finish name=$runnerName timeout=${jobTimeoutSeconds}s"
 $waited = 0
 while (Test-WorkerRunning $workDir) {
-	if ($waited -ge $jobTimeout) {
-		throw "github-runner stop: job was still running after ${jobTimeout}s name=$runnerName"
+	if ($waited -ge $jobTimeoutSeconds) {
+		throw "github-runner stop: job was still running after ${jobTimeoutSeconds}s name=$runnerName"
 	}
-	Start-Sleep -Seconds $pollInterval
-	$waited += $pollInterval
+	Start-Sleep -Seconds $pollSeconds
+	$waited += $pollSeconds
 }
 
 Write-Host "github-runner stop: job finished; safe to stop name=$runnerName waited=${waited}s"

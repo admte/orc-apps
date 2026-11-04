@@ -1,3 +1,29 @@
+<#
+.SYNOPSIS
+Registers this node's runner if it has no identity yet, then runs the listener.
+
+.DESCRIPTION
+Run from the directory install ran in. A personal access token registers under the host
+name with the pool label; a registration orc8r minted carries its own url, name and labels.
+
+.PARAMETER Url
+Repository or organization URL; used with a personal access token, ignored for a
+registration orc8r minted.
+
+.PARAMETER TokenFile
+File holding a personal access token or orc8r's minted registration (JSON); optional when
+the node is already registered.
+
+.PARAMETER Pool
+Label the runner carries with a personal access token.
+#>
+[CmdletBinding()]
+param(
+	[string]$Url = '',
+	[string]$TokenFile = '',
+	[string]$Pool = ''
+)
+
 $ErrorActionPreference = 'Stop'
 # Windows PowerShell on Server 2016 offers only TLS 1.0 and 1.1 by default, and
 # GitHub accepts nothing older than TLS 1.2.
@@ -13,13 +39,10 @@ $ErrorActionPreference = 'Stop'
 # the listener.
 
 function Get-Token {
-	if ($env:TOKEN_FILE) {
-		return (Get-Content -Raw -LiteralPath $env:TOKEN_FILE).Trim()
+	if (-not $TokenFile) {
+		throw 'github-runner start: -TokenFile is required'
 	}
-	if ($env:TOKEN) {
-		return $env:TOKEN.Trim()
-	}
-	throw 'TOKEN_FILE or TOKEN is required'
+	return (Get-Content -Raw -LiteralPath $TokenFile).Trim()
 }
 
 # The token param holds either an operator's personal access token or a
@@ -81,10 +104,10 @@ function Get-MintedRegistration($value) {
 }
 
 function Get-GitHubApiPath {
-	if (-not $env:URL -or -not $env:URL.StartsWith('https://github.com/')) {
-		throw 'URL must start with https://github.com/'
+	if (-not $Url -or -not $Url.StartsWith('https://github.com/')) {
+		throw 'github-runner start: -Url must start with https://github.com/'
 	}
-	$path = $env:URL.Substring('https://github.com/'.Length).TrimEnd('/')
+	$path = $Url.Substring('https://github.com/'.Length).TrimEnd('/')
 	if ($path.EndsWith('.git')) {
 		$path = $path.Substring(0, $path.Length - 4)
 	}
@@ -130,9 +153,9 @@ if (-not (Test-Path (Join-Path $workDir 'config.cmd'))) {
 $workDir = (Resolve-Path $workDir).Path
 Set-Location $workDir
 
-# Runner name is the host name; its label is the pool name (pool.name x-source -> POOL).
+# Runner name is the host name; its label is the pool name (pool.name x-source -> -Pool).
 $runnerName = $env:COMPUTERNAME
-$labels = if ($env:POOL) { $env:POOL } else { '' }
+$labels = $Pool
 
 # `.runner` is the file config.cmd writes when a directory has been configured; it
 # and the `.credentials` beside it are this node's identity. Absent means the node
@@ -147,7 +170,7 @@ $labels = if ($env:POOL) { $env:POOL } else { '' }
 # A registration orc8r minted carries its own url — a repository or, in the
 # persistent-org mode, an organization — runner name and labels, and the token in
 # it is already a registration token, so it goes to config.cmd as is; the
-# operator's URL, the host name and POOL are not used for it. An absent token is
+# operator's -Url, the host name and -Pool are not used for it. An absent token is
 # not fatal here: a node with `.runner` starts without one, and the PAT
 # registration below fails on it by name.
 try { $credential = Get-Token } catch { $credential = '' }
@@ -174,6 +197,9 @@ if (Test-Path (Join-Path $workDir '.runner')) {
 		throw "github-runner start: config.cmd failed with exit code $LASTEXITCODE"
 	}
 } else {
+	if (-not $Url) {
+		throw 'github-runner start: -Url is required'
+	}
 	# A registration token is short-lived, so it is minted at the moment it is
 	# used and never persisted.
 	$registration = Invoke-RestMethod -Method Post `
@@ -183,7 +209,7 @@ if (Test-Path (Join-Path $workDir '.runner')) {
 		throw 'github-runner start: failed to create registration token'
 	}
 
-	$configArgs = @('--name', $runnerName, '--url', $env:URL, '--token', $registration.token, '--unattended', '--replace')
+	$configArgs = @('--name', $runnerName, '--url', $Url, '--token', $registration.token, '--unattended', '--replace')
 	if ($labels) {
 		$configArgs += @('--labels', $labels)
 	}
