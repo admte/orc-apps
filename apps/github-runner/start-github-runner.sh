@@ -208,8 +208,8 @@ label_payload() {
 # failure is only logged: a runner with no label still beats a node that will not
 # start.
 ensure_pool_label() {
-	github_token=$(token_value)
-	api_path=$(github_api_path)
+	github_token=$(token_value) || exit 1
+	api_path=$(github_api_path) || exit 1
 	runner_id=$(find_runner_id) || fail "failed to list runners name=$runner_name"
 	[ -n "$runner_id" ] || fail "runner is not registered name=$runner_name"
 	curl -fsSL -X POST -o /dev/null \
