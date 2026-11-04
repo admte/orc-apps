@@ -3,7 +3,7 @@
 Drains this node's runner, then exits 0 with the listener still running.
 
 .DESCRIPTION
-With a personal access token, takes the pool label off so no new job is routed here; in
+With a personal access token, takes the labels off so no new job is routed here; in
 either mode, waits for the job in flight to finish. Leaves the registration in place.
 
 .PARAMETER Url
@@ -12,8 +12,8 @@ Repository or organization URL (personal access token).
 .PARAMETER TokenFile
 File holding a personal access token or orc8r's minted registration (JSON).
 
-.PARAMETER Pool
-Label to take off (personal access token).
+.PARAMETER Labels
+Comma-separated labels to take off (personal access token).
 
 .PARAMETER JobTimeout
 Longest wait for the job in flight, in seconds (default 3540).
@@ -25,7 +25,7 @@ How often to look for it, in seconds (default 10).
 param(
 	[string]$Url = '',
 	[string]$TokenFile = '',
-	[string]$Pool = '',
+	[string]$Labels = '',
 	# Kept under the 1h stop.timeout so the wait ends with a message of its own
 	# rather than being cut off mid-poll.
 	[string]$JobTimeout = '3540',
@@ -38,8 +38,8 @@ $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 # Quiesce hook: the listener is still running and may be mid-job. With a personal
-# access token, take the pool label off the runner so the queue stops routing work
-# here; in either mode, wait for the worker that is already running to finish,
+# access token, take this app's labels off the runner so the queue stops routing
+# work here; in either mode, wait for the worker that is already running to finish,
 # then exit 0. Stopping the listener is the runtime's next step; deregistering is
 # stopped-github-runner.ps1's, and only when the node is going away for good.
 
@@ -51,6 +51,25 @@ if ($PollInterval -notmatch '\A[0-9]+\z' -or [int]$PollInterval -eq 0) {
 }
 $jobTimeoutSeconds = [int]$JobTimeout
 $pollSeconds = [int]$PollInterval
+
+# Returns the comma-separated labels in $value with the space around each item
+# trimmed and empty items dropped. GitHub refuses a label with a space in it or
+# longer than 256 characters, so such a label stops here.
+function Get-LabelList($value) {
+	foreach ($item in $value.Split(',')) {
+		$item = $item.Trim()
+		if (-not $item) { continue }
+		if ($item -match '[\s\p{Cc}]') {
+			throw "github-runner stop: label '$item' contains a space or a control character"
+		}
+		if ($item.Length -gt 256) {
+			throw "github-runner stop: label '$item' is longer than 256 characters"
+		}
+		$item
+	}
+}
+
+$labelList = @(Get-LabelList $Labels)
 
 function Get-Token {
 	if (-not $TokenFile) {
@@ -122,20 +141,19 @@ if (-not (Test-Path (Join-Path $workDir 'config.cmd'))) {
 $workDir = (Resolve-Path $workDir).Path
 
 $runnerName = $env:COMPUTERNAME
-$label = $Pool
-# Absent is not fatal: without a credential there is no label to take off, and
+# Absent is not fatal: without a credential there are no labels to take off, and
 # the wait for the current job below still holds.
 try { $credential = Get-Token } catch { $credential = '' }
 
 # A minted registration holds no API credential and set its labels when it
-# registered, so there is no label to take off: the service stop, once the job
+# registered, so there are no labels to take off: the service stop, once the job
 # below has finished, is what stops the listener taking another.
 if (-not $credential) {
 	Write-Host "github-runner stop: no credential available; skipping the label step name=$runnerName"
 } elseif (Test-Minted $credential) {
-	Write-Host "github-runner stop: minted registration; no label to remove, relying on the service stop name=$runnerName"
-} elseif (-not $label) {
-	Write-Host "github-runner stop: no pool label to remove; relying on the service stop name=$runnerName"
+	Write-Host "github-runner stop: minted registration; no labels to remove, relying on the service stop name=$runnerName"
+} elseif ($labelList.Count -eq 0) {
+	Write-Host "github-runner stop: no labels to remove; relying on the service stop name=$runnerName"
 } else {
 	if (-not $Url) {
 		throw 'github-runner stop: -Url is required'
@@ -146,12 +164,17 @@ if (-not $credential) {
 	if (-not $runnerId) {
 		Write-Host "github-runner stop: runner is not registered; nothing to unlabel name=$runnerName"
 	} else {
-		Write-Host "github-runner stop: removing the pool label so no new job is routed here name=$runnerName id=$runnerId label=$label"
-		try {
-			Invoke-RestMethod -Method Delete -Headers $headers `
-				-Uri "https://api.github.com/$apiPath/actions/runners/$runnerId/labels/$label" | Out-Null
-		} catch {
-			Write-Host "github-runner stop: label removal failed; continuing to wait for the current job name=$runnerName label=$label"
+		Write-Host "github-runner stop: removing the labels so no new job is routed here name=$runnerName id=$runnerId labels=$($labelList -join ',')"
+		# One request per label; a failure is logged and the rest still go. A label goes
+		# into the request path, so it is percent-encoded there: a slash, a question mark
+		# or a hash in it would otherwise change the URL.
+		foreach ($label in $labelList) {
+			try {
+				Invoke-RestMethod -Method Delete -Headers $headers `
+					-Uri "https://api.github.com/$apiPath/actions/runners/$runnerId/labels/$([uri]::EscapeDataString($label))" | Out-Null
+			} catch {
+				Write-Host "github-runner stop: label removal failed; continuing to wait for the current job name=$runnerName label=$label"
+			}
 		}
 	}
 }

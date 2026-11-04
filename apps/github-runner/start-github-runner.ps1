@@ -4,7 +4,7 @@ Registers this node's runner if it has no identity yet, then runs the listener.
 
 .DESCRIPTION
 Run from the directory install ran in. A personal access token registers under the host
-name with the pool label; a registration orc8r minted carries its own url, name and labels.
+name with -Labels; a registration orc8r minted carries its own url, name and labels.
 
 .PARAMETER Url
 Repository or organization URL; used with a personal access token, ignored for a
@@ -14,14 +14,14 @@ registration orc8r minted.
 File holding a personal access token or orc8r's minted registration (JSON); optional when
 the node is already registered.
 
-.PARAMETER Pool
-Label the runner carries with a personal access token.
+.PARAMETER Labels
+Comma-separated labels the runner carries with a personal access token.
 #>
 [CmdletBinding()]
 param(
 	[string]$Url = '',
 	[string]$TokenFile = '',
-	[string]$Pool = ''
+	[string]$Labels = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -37,6 +37,25 @@ $ErrorActionPreference = 'Stop'
 # material — into an image every clone shares. Install leaves the runner
 # unconfigured; this script gives the running node its own identity, then runs
 # the listener.
+
+# Returns the comma-separated labels in $value with the space around each item
+# trimmed and empty items dropped. GitHub refuses a label with a space in it or
+# longer than 256 characters, so such a label stops here.
+function Get-LabelList($value) {
+	foreach ($item in $value.Split(',')) {
+		$item = $item.Trim()
+		if (-not $item) { continue }
+		if ($item -match '[\s\p{Cc}]') {
+			throw "github-runner start: label '$item' contains a space or a control character"
+		}
+		if ($item.Length -gt 256) {
+			throw "github-runner start: label '$item' is longer than 256 characters"
+		}
+		$item
+	}
+}
+
+$labelList = @(Get-LabelList $Labels)
 
 function Get-Token {
 	if (-not $TokenFile) {
@@ -153,9 +172,9 @@ if (-not (Test-Path (Join-Path $workDir 'config.cmd'))) {
 $workDir = (Resolve-Path $workDir).Path
 Set-Location $workDir
 
-# Runner name is the host name; its label is the pool name (pool.name x-source -> -Pool).
+# Runner name is the host name; its labels are -Labels, parsed above.
 $runnerName = $env:COMPUTERNAME
-$labels = $Pool
+$runnerLabels = $labelList -join ','
 
 # `.runner` is the file config.cmd writes when a directory has been configured; it
 # and the `.credentials` beside it are this node's identity. Absent means the node
@@ -170,7 +189,7 @@ $labels = $Pool
 # A registration orc8r minted carries its own url — a repository or, in the
 # persistent-org mode, an organization — runner name and labels, and the token in
 # it is already a registration token, so it goes to config.cmd as is; the
-# operator's -Url, the host name and -Pool are not used for it. An absent token is
+# operator's -Url, the host name and -Labels are not used for it. An absent token is
 # not fatal here: a node with `.runner` starts without one, and the PAT
 # registration below fails on it by name.
 try { $credential = Get-Token } catch { $credential = '' }
@@ -183,15 +202,15 @@ if (Test-Path (Join-Path $workDir '.runner')) {
 } elseif ($minted) {
 	$registration = Get-MintedRegistration $credential
 	$runnerName = $registration.name
-	$labels = $registration.labels
+	$runnerLabels = $registration.labels
 
 	# Only the credential's labels, none of GitHub's defaults: a job elsewhere in the
 	# repository or organization that asks for `self-hosted`, an OS or an
 	# architecture must not land on a machine orc8r runs for one pool.
 	$configArgs = @('--unattended', '--url', $registration.url, '--token', $registration.token, '--name', $runnerName,
-		'--no-default-labels', '--labels', $labels, '--replace')
+		'--no-default-labels', '--labels', $runnerLabels, '--replace')
 
-	Write-Host "github-runner start: registering with the minted registration name=$runnerName labels=$labels"
+	Write-Host "github-runner start: registering with the minted registration name=$runnerName labels=$runnerLabels"
 	& .\config.cmd @configArgs
 	if ($LASTEXITCODE -ne 0) {
 		throw "github-runner start: config.cmd failed with exit code $LASTEXITCODE"
@@ -210,31 +229,31 @@ if (Test-Path (Join-Path $workDir '.runner')) {
 	}
 
 	$configArgs = @('--name', $runnerName, '--url', $Url, '--token', $registration.token, '--unattended', '--replace')
-	if ($labels) {
-		$configArgs += @('--labels', $labels)
+	if ($runnerLabels) {
+		$configArgs += @('--labels', $runnerLabels)
 	}
 
-	Write-Host "github-runner start: registering name=$runnerName labels=$labels"
+	Write-Host "github-runner start: registering name=$runnerName labels=$runnerLabels"
 	& .\config.cmd @configArgs
 	if ($LASTEXITCODE -ne 0) {
 		throw "github-runner start: config.cmd failed with exit code $LASTEXITCODE"
 	}
 }
 
-# Puts the pool label back. stop-github-runner.ps1 takes it off through the API so
+# Puts the labels back. stop-github-runner.ps1 takes them off through the API so
 # the queue stops routing work here during a drain, and the registration itself
 # outlives every stop reason but `terminate` — so a drained node would otherwise
-# come back online carrying only its default labels, and `runs-on: <pool>` would
+# come back online carrying only its default labels, and `runs-on: <label>` would
 # never match it again: healthy-looking, and silently never given another job.
 # POST .../labels adds without replacing, so this runs on both PAT paths above,
 # whether config.cmd just passed --labels or the registration was already there.
-# It is never fatal: a runner with no label still beats a node that will not start.
+# It is never fatal: a runner with no labels still beats a node that will not start.
 # A minted registration set its labels at registration and holds no API
 # credential, so there is nothing to restore: stop leaves them alone too.
 if ($minted) {
 	Write-Host "github-runner start: labels were set at registration; no label upkeep name=$runnerName"
-} elseif (-not $labels) {
-	Write-Host "github-runner start: no pool label to ensure name=$runnerName"
+} elseif ($labelList.Count -eq 0) {
+	Write-Host "github-runner start: no labels to ensure name=$runnerName"
 } else {
 	try {
 		$labelHeaders = @{ Accept = 'application/vnd.github+json'; Authorization = "token $(Get-Token)" }
@@ -243,14 +262,14 @@ if ($minted) {
 		if (-not $runnerId) {
 			throw "runner is not registered name=$runnerName"
 		}
-		# Built from ConvertTo-Json on the label itself, so a quote or a backslash
-		# in it cannot break the body.
-		$body = '{"labels":[' + ($labels | ConvertTo-Json -Compress) + ']}'
+		# Every label in one body, each built from ConvertTo-Json on the label
+		# itself, so a quote or a backslash in it cannot break the body.
+		$body = '{"labels":[' + (($labelList | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress }) -join ',') + ']}'
 		Invoke-RestMethod -Method Post -Headers $labelHeaders -ContentType 'application/json' `
 			-Body $body -Uri "https://api.github.com/$labelApiPath/actions/runners/$runnerId/labels" | Out-Null
-		Write-Host "github-runner start: pool label ensured name=$runnerName id=$runnerId label=$labels"
+		Write-Host "github-runner start: labels ensured name=$runnerName id=$runnerId labels=$runnerLabels"
 	} catch {
-		Write-Host "github-runner start: could not ensure the pool label; starting without it name=$runnerName label=$labels error=$($_.Exception.Message)"
+		Write-Host "github-runner start: could not ensure the labels; starting without them name=$runnerName labels=$runnerLabels error=$($_.Exception.Message)"
 	}
 }
 
