@@ -20,7 +20,7 @@ config:
         description: Needed only for a gated or private model. Created under Settings > Access Tokens with read access.
         sensitive: true
   # Two parameters, and nothing else to ask for. The port is the endpoint's own,
-  # the number of GPUs is the node's, and the rest are vLLM's defaults. Adding a
+  # the number of GPUs is the machine's, and the rest are vLLM's defaults. Adding a
   # parameter later is free; removing one is not.
   versions:
     # github_releases, like terraform and gitlab-runner: the releases are tagged
@@ -31,7 +31,7 @@ config:
       pattern: '^v?(?P<version>\d+\.\d+\.\d+)$'
       prerelease: false
       # No latest_per. For a toolchain the minor is the release axis, so the
-      # catalog apps keep the newest patch per minor; for a server it is the
+      # toolchain apps keep the newest patch per minor; for a server it is the
       # patches that carry the model support and the fixes, so the list is
       # simply the thirty most recent releases.
       limit: 30
@@ -44,12 +44,12 @@ config:
       probe:
         # vLLM's own deployment guide probes this path. Until the model is
         # loaded there is no listener at all, so the probe fails on the dial —
-        # either way the node takes no traffic before it can serve.
+        # either way the probe passes only once the server can answer.
         http: /health
         interval: 15s
         timeout: 5s
-      # Every node holds its own copy of the same model and any of them can serve
-      # any request, so there is nothing to keep on one node.
+      # Every instance holds its own copy of the same model and any of them can
+      # serve any request, so requests need not stick to one instance.
       serve: spread
   # The wheel and its CUDA payload are gigabytes.
   install:
@@ -70,7 +70,7 @@ files:
   - uninstall-vllm.sh
 platforms:
   # vLLM publishes manylinux wheels for both x86-64 and aarch64 — the latter is
-  # what the Grace-Hopper class of NVIDIA node runs.
+  # what NVIDIA Grace Hopper systems run.
   - os: linux
     arch: amd64
   - os: linux

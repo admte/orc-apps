@@ -9,8 +9,8 @@ config:
   # later; removing one is not free.
   #
   # Install only, resolved by the naming convention (`install-nvidia-driver.sh`).
-  # The timeout bounds one pass: a reboot ends the pass, and the pass after the
-  # reboot starts the clock again.
+  # The timeout bounds one run of the script: a reboot ends the run, and running
+  # it again after the reboot starts the clock again.
   install:
     timeout: 1800s
 files:
