@@ -26,7 +26,7 @@ config:
       labels:
         type: string
         title: Labels
-        description: Swarm agent labels; sourced from the pool name.
+        description: Space-separated labels for the Swarm agent
         x-source:
           kind: pool.name
       # The project's trust chain, so both halves of the agent can verify a

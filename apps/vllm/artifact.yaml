@@ -12,7 +12,7 @@ config:
       model:
         type: string
         title: Model
-        description: Hugging Face model to serve, or a path on the node. Downloaded on first start, which takes as long as the weights are large.
+        description: Hugging Face model to serve, or a path on the machine. Downloaded on first start, which takes as long as the weights are large.
         placeholder: meta-llama/Llama-3.1-8B-Instruct
       hf_token:
         type: string

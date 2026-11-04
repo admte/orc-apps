@@ -23,9 +23,7 @@ config:
       token:
         type: string
         title: GitHub token
-        description: >-
-          Leave empty to use this project's Source Control connection. Otherwise a
-          token that can register runners for the repository.
+        description: GitHub token that can register runners for `url`
         sensitive: true
         lifetime: runtime
         x-source:
