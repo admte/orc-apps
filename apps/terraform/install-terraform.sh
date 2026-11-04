@@ -51,8 +51,8 @@ ensure_unzip
 
 version=${APP_VERSION:-${TERRAFORM_VERSION:-}}
 if [ -z "$version" ]; then
-	# No version was resolved (the app was installed as `terraform:default`), so
-	# ask the vendor which release is current instead of guessing one.
+	# No APP_VERSION was given, so ask the vendor which release is current instead
+	# of guessing one.
 	release=$(curl -fsSL https://api.releases.hashicorp.com/v1/releases/terraform/latest) ||
 		fail "could not determine the latest Terraform version"
 	version=$(printf '%s' "$release" |

@@ -1,9 +1,9 @@
 #!/bin/sh
 set -eu
 
-# Install phase: downloads and unpacks the runner, and nothing else. It takes no
-# url and no token: the build is the latest public release, whichever credential
-# the node later registers with, and the runner updates itself from there.
+# Downloads and unpacks the runner, and nothing else. It takes no url and no
+# token: the build is the latest public release, whichever credential the runner
+# later registers with, and the runner updates itself from there.
 
 usage() {
 	cat <<'USAGE'
@@ -68,8 +68,8 @@ ensure_tool() {
 }
 
 # The Actions runner refuses to configure or run as root ("Must not run with
-# sudo"), but lifecycle phases execute as root. Create a dedicated service
-# account here so start-github-runner.sh can drop to it.
+# sudo"), but these scripts run as root. Create a dedicated service account
+# here so start-github-runner.sh can drop to it.
 ensure_service_user() {
 	if id "$service_user" >/dev/null 2>&1; then
 		return 0
@@ -130,8 +130,8 @@ esac
 
 need curl
 need python3
-# Not used here any more, but the start phase drops to the service account with
-# it; a bake that produced an image without it would only fail at first boot.
+# Not used here, but start-github-runner.sh drops to the service account with
+# it, so a machine without it fails now rather than at the first start.
 need setpriv
 ensure_tool tar
 
@@ -192,10 +192,8 @@ if [ "$runner_os" = linux ]; then
 fi
 chown -R "$service_user:$service_user" "$work_dir"
 
-# Nothing below this point may create node identity. A pool bake runs the install
-# phase alone and snapshots the disk, so anything written here is shared by every
-# clone of the image: registering would leave a dead runner on GitHub for a
-# builder that no longer exists, and `config.sh` writes `.runner` and
-# `.credentials` — the runner's own auth material — into the snapshot. The
-# registration is start-github-runner.sh's, once per node.
+# Nothing here registers the runner. An installed disk may be imaged and copied
+# to other machines, and `config.sh` writes `.runner` and `.credentials` — the
+# runner's own auth material — that every copy would then share. Registration is
+# start-github-runner.sh's, once per machine.
 echo "github-runner install: complete dir=$work_dir user=$service_user" >&2

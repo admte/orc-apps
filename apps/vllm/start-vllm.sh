@@ -2,7 +2,8 @@
 set -eu
 
 # Serves one model over vLLM's OpenAI-compatible API. Everything the server is
-# told is either the operator's two settings or derived from the node itself.
+# told is either MODEL and the optional Hugging Face token, or derived from the
+# machine itself.
 
 SERVICE_USER=${SERVICE_USER:-vllm}
 
@@ -35,9 +36,9 @@ need setpriv
 
 [ -n "${MODEL:-}" ] || fail "MODEL is required"
 
-# By the version this app instance was installed as: a node may carry two, and
-# `current` is whichever was installed last. `current` is the fallback, so the
-# package also starts by hand, without the orchestrator setting APP_VERSION.
+# By APP_VERSION, the version to serve: a machine may carry two, and `current`
+# is whichever was installed last. `current` is the fallback, so this script
+# also starts without APP_VERSION set.
 root=${VLLM_INSTALL_ROOT:-/opt/vllm}
 if [ -n "${APP_VERSION:-}" ] && [ -x "$root/$APP_VERSION/venv/bin/vllm" ]; then
 	prefix="$root/$APP_VERSION"
@@ -49,9 +50,9 @@ fi
 server="$prefix/venv/bin/vllm"
 [ -x "$server" ] || fail "no vLLM install found; install must run first path=$server"
 
-# One process per node, using every GPU it may use. The operator is not asked
-# how many: the node knows. CUDA_VISIBLE_DEVICES wins where it is set, because
-# that is the set the server will actually see.
+# One process per machine, using every GPU it may use. Nobody is asked how many:
+# the machine knows. CUDA_VISIBLE_DEVICES wins where it is set, because that is
+# the set the server will actually see.
 # Set-but-empty and -1 both mean "no devices" in CUDA's own convention, so the
 # test is whether the variable exists, and entries beginning with a minus do not
 # count. Getting this wrong would tell the server to use GPUs it cannot see.
@@ -61,15 +62,15 @@ if [ "${CUDA_VISIBLE_DEVICES+set}" = set ]; then
 else
 	need nvidia-smi
 	# stderr is left visible: a broken driver should say so rather than be
-	# reported as a node with no GPU.
+	# reported as a machine with no GPU.
 	gpus=$(nvidia-smi -L | grep -c '^GPU ' || true)
 fi
 [ "$gpus" -ge 1 ] ||
-	fail "no NVIDIA GPU visible on this node; vLLM cannot serve without one"
+	fail "no NVIDIA GPU visible on this machine; vLLM cannot serve without one"
 
-# The endpoint's own port, and it must stay equal to `endpoints.api.port` in
-# artifact.yaml: nothing enforces that, and a mismatch shows up only as an
-# endpoint that never goes ready.
+# The port the API listens on. Its default must stay equal to the port that
+# artifact.yaml beside this script declares: nothing enforces that, and a
+# mismatch shows up only as an API that never answers where it is expected.
 #
 # VLLM_SERVE_PORT and not VLLM_PORT: VLLM_PORT is vLLM's own variable for the
 # base of its internal socket range, so reusing it here would move the server
@@ -102,11 +103,11 @@ fi
 # spent on the download and never reaches the environment of the long-lived
 # process — which is the one that later runs whatever the model is asked to do.
 if [ -n "$hf_token" ]; then
-	# A model given as a path on the node is already there: nothing to fetch, and
+	# A model given as a path on the machine is already there: nothing to fetch, and
 	# no reason for the server to hold a token it will never use.
 	case "$MODEL" in
 	/* | ./* | ../*)
-		note "the model is a path on this node, so the Hugging Face token is not used"
+		note "the model is a path on this machine, so the Hugging Face token is not used"
 		hf_token=''
 		downloader=''
 		;;
@@ -127,7 +128,7 @@ if [ -n "$hf_token" ]; then
 		note "fetching the weights for a gated model before starting model=$MODEL"
 		# Exported, never written as an argument. `env NAME=value` would put the
 		# token in the argv of env and setpriv, and /proc/<pid>/cmdline is world
-		# readable to every job on this node.
+		# readable to every process on this machine.
 		export HF_TOKEN="$hf_token"
 		setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_USER" --init-groups \
 			env HOME="$prefix" HF_HOME="$HF_HOME" \
@@ -163,12 +164,13 @@ else
 	unset HF_TOKEN 2>/dev/null || true
 fi
 
-# [::] and not 0.0.0.0: the probe dials the node's own addresses and, where the
-# endpoint is exposed publicly, a pool address that is usually IPv6. A socket
-# bound to the IPv4 wildcard has nothing listening for what arrives there.
+# [::] and not 0.0.0.0, so the server also answers on the machine's IPv6
+# addresses: a socket bound to the IPv4 wildcard has nothing listening for what
+# arrives there.
 #
-# setpriv, never su or runuser: those start a new session, which would put the
-# server outside the process group the runtime signals.
+# setpriv, never su or runuser: those start a new session, which would take the
+# server out of this script's process group, so a signal sent to the group would
+# miss it.
 exec setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_USER" --init-groups \
 	env -u HF_TOKEN_FILE HOME="$prefix" HF_HOME="$HF_HOME" \
 	"$server" serve "$MODEL" \

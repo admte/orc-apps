@@ -2,9 +2,9 @@
 set -eu
 
 # Installs one vLLM release into its own virtual environment and creates the
-# account the server runs as. Nothing about this node's model or port is decided
-# here: that belongs to start, because a pool bake runs this phase alone and
-# snapshots the disk.
+# account the server runs as. Nothing about the model or port is decided here:
+# that belongs to start-vllm.sh, so one install can serve whichever model each
+# start asks for.
 
 SERVICE_USER=${SERVICE_USER:-vllm}
 
@@ -13,8 +13,8 @@ fail() {
 	exit 1
 }
 
-# Progress goes to stdout: the node log shows an install's stderr as warnings,
-# and a healthy install has nothing to warn about.
+# Progress goes to stdout and only warnings and errors to stderr, so a healthy
+# install writes nothing there.
 note() {
 	echo "vllm install: $*"
 }
@@ -24,17 +24,17 @@ need() {
 }
 
 # NEEDRESTART_SUSPEND on every apt-get: Ubuntu's needrestart hook reports on
-# stderr after each install, and the node log shows that as warnings about
-# services nobody asked to restart.
+# stderr after each install, which reads as warnings about services nobody asked
+# to restart.
 
 # python3 on its own is not enough: Debian and Ubuntu ship it without the piece
 # that creates virtual environments, and Alpine without the piece that seeds pip
 # into one. Same shape as gcloud's ensure_python and the ensure_unzip in aws,
 # terraform and vault — try it, install through whichever package manager the
-# node has, then check again.
+# machine has, then check again.
 #
 # Tried rather than asked: `python3 -m venv --help` answers successfully on a
-# node where actually creating one fails.
+# machine where actually creating one fails.
 venv_works() {
 	rm -rf "$venv"
 	python3 -m venv "$venv" >/dev/null 2>&1
@@ -104,13 +104,13 @@ Linux) ;;
 esac
 case "$(uname -m)" in
 x86_64 | amd64 | aarch64 | arm64) ;;
-*) fail "vLLM publishes x86-64 and aarch64 wheels; this node is $(uname -m)" ;;
+*) fail "vLLM publishes x86-64 and aarch64 wheels; this machine is $(uname -m)" ;;
 esac
 [ "$(id -u)" -eq 0 ] || fail "must run as root"
 
 need python3
-# Checked here and not only in start: a bake runs install alone, and an image
-# that turned out to be missing setpriv would fail at first boot instead.
+# Checked here and not only in start, so a machine without setpriv fails now
+# rather than at the first start.
 need setpriv
 
 [ -n "${APP_VERSION:-}" ] || fail "APP_VERSION is required"
@@ -125,22 +125,22 @@ venv="$prefix/venv"
 cache="$root/cache"
 
 # The server should not answer the network as root. Created here so start can
-# drop to it, the same way the CI agent packages do.
+# drop to it.
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
 	need useradd
 	useradd -r -U -M -s /usr/sbin/nologin "$SERVICE_USER" ||
 		fail "could not create the service user $SERVICE_USER"
 fi
 
-# A GPU is not needed to install, but a node without one will never serve, and
+# A GPU is not needed to install, but a machine without one will never serve, and
 # finding that out at install time is cheaper than at first request.
 if ! command -v nvidia-smi >/dev/null 2>&1; then
-	echo "vllm install: warning: nvidia-smi is not on this node; vLLM will not start without an NVIDIA GPU" >&2
+	echo "vllm install: warning: nvidia-smi is not on this machine; vLLM will not start without an NVIDIA GPU" >&2
 fi
 
-# Install runs again over a version that is already there — a repair, or the
-# same version re-resolved to a newer package — and the server may be running
-# from that tree. A finished install is kept and completed in place: the pip
+# Install may run again over a version that is already there — a repair, or a
+# re-install of the same version — and the server may be running from that
+# tree. A finished install is kept and completed in place: the pip
 # steps below confirm what is there and add what is missing. Only a tree that
 # never finished is thrown away.
 done_marker="$prefix/.installed"
@@ -159,7 +159,7 @@ fi
 ensure_compiler
 
 # pip verifies every wheel it installs against the hash the index publishes, and
-# the version is pinned exactly, so the node gets the release the operator chose
+# the version is pinned exactly, so the machine gets the release APP_VERSION names
 # and nothing newer.
 note "installing vllm==$APP_VERSION — the wheel and its CUDA payload are gigabytes"
 "$venv/bin/pip" install --no-cache-dir --upgrade pip >/dev/null ||
@@ -174,7 +174,7 @@ note "installing vllm==$APP_VERSION — the wheel and its CUDA payload are gigab
 # it independently of the CUDA headers torch pins, and the two drift apart (a
 # 13.4 compiler against 13.0 headers refuses to build). FlashInfer publishes
 # the same kernels prebuilt for every supported GPU generation, per release and
-# CUDA version, so nothing is compiled on the node and no CUDA toolkit is
+# CUDA version, so nothing is compiled on the machine and no CUDA toolkit is
 # needed. The version is exact, and the local `+cuXYZ` part exists only on
 # FlashInfer's index, so the extra index cannot substitute a PyPI package.
 flashinfer=$("$venv/bin/pip" show flashinfer-python 2>/dev/null | sed -n 's/^Version: //p')
@@ -195,14 +195,14 @@ installed=$("$venv/bin/pip" show vllm 2>/dev/null | sed -n 's/^Version: //p')
 chown -R "$SERVICE_USER:$SERVICE_USER" "$prefix" ||
 	fail "could not give $prefix to $SERVICE_USER"
 
-# Shared by every installed version, so a node that changes version does not
-# download the same model again.
+# Shared by every installed version, so changing version does not download the
+# same model again.
 mkdir -p "$cache"
 chown "$SERVICE_USER:$SERVICE_USER" "$cache" ||
 	fail "could not give $cache to $SERVICE_USER"
 
-# So the package can also be started by hand, without the orchestrator setting
-# APP_VERSION. Whichever version was installed last is what `current` names.
+# So start-vllm.sh also works without APP_VERSION set. Whichever version was
+# installed last is what `current` names.
 if [ -e "$root/current" ] && [ ! -L "$root/current" ]; then
 	fail "$root/current exists and is not a symlink; remove it and re-install"
 fi

@@ -14,8 +14,8 @@ need() {
 	command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
 }
 
-# The CA path is optional so an older start script — one from a package installed
-# before the tls_ca param existed — still runs this runner unchanged.
+# The CA path is optional so an older start script — one from before the CA bundle
+# was an argument — still runs this runner unchanged.
 case "$#" in
 7 | 8) ;;
 *) fail "expected Jenkins URL, username, password file, agent name, labels, agent directory, logging config, and optionally a CA bundle" ;;
@@ -30,9 +30,9 @@ AGENT_DIR=$6
 LOG_CONFIG_PATH=$7
 CA_BUNDLE_PATH=${8:-}
 SWARM_JAR_PATH="$AGENT_DIR/swarm-client.jar"
-# The OS store plus the platform chain, for curl.
+# The OS store plus the supplied CA chain, for curl.
 CA_TRUST_PATH="$AGENT_DIR/ca-trust.pem"
-# The JDK's own cacerts plus the platform chain, for the JVM.
+# The JDK's own cacerts plus the supplied CA chain, for the JVM.
 TRUSTSTORE_PATH="$AGENT_DIR/truststore.p12"
 
 [ -n "$AGENT_NAME" ] || AGENT_NAME=$(hostname)
@@ -203,8 +203,8 @@ ensure_matching_swarm_jar() {
 	trap - EXIT INT TERM
 }
 
-# Rebuilds the JVM's truststore: a copy of the JDK's own cacerts with the platform
-# chain added to it.
+# Rebuilds the JVM's truststore: a copy of the JDK's own cacerts with the supplied
+# CA chain added to it.
 #
 # A copy rather than the JDK's cacerts in place, because the runner replaces that
 # whole JDK directory whenever the controller's Java major version changes — an
@@ -243,11 +243,11 @@ build_java_truststore() {
 		"$keytool" -importcert -noprompt -trustcacerts \
 			-alias "orc-platform-ca-$imported" -file "$cert" \
 			-keystore "$TRUSTSTORE_PATH" -storepass changeit >/dev/null ||
-			fail "failed to import the platform CA alias=orc-platform-ca-$imported"
+			fail "failed to import the supplied CA alias=orc-platform-ca-$imported"
 	done
 	rm -rf "$split_dir"
 	trap - EXIT INT TERM
-	[ "$imported" -gt 0 ] || fail "no certificate in the platform CA bundle: $CA_BUNDLE_PATH"
+	[ "$imported" -gt 0 ] || fail "no certificate in the CA bundle: $CA_BUNDLE_PATH"
 	echo "jenkins-agent runner: rebuilt the JVM truststore certs=$imported path=$TRUSTSTORE_PATH" >&2
 }
 
@@ -261,17 +261,17 @@ need tar
 jenkins_password=$(tr -d '\r\n' <"$PASSWORD_FILE")
 [ -n "$jenkins_password" ] || fail "password file is empty"
 
-# Before the first controller call, and unconditionally on every start: the platform
-# renews its certificates by restarting this app, so the chain staged for this run is
-# the only one that can be trusted to be current. With none supplied, JENKINS_CA_BUNDLE
-# stays empty and curl verifies against the OS store, exactly as it always did.
+# Before the first controller call, and unconditionally on every start: a renewed
+# chain arrives with a restart, so the chain staged for this run is the only one
+# that can be trusted to be current. With none supplied, JENKINS_CA_BUNDLE stays
+# empty and curl verifies against the OS store, exactly as it always did.
 if [ -n "$CA_BUNDLE_PATH" ] && [ -s "$CA_BUNDLE_PATH" ]; then
 	jenkins_trust_init "$CA_BUNDLE_PATH" "$CA_TRUST_PATH"
-	echo "jenkins-agent runner: verifying the controller against the platform CA path=$CA_TRUST_PATH" >&2
+	echo "jenkins-agent runner: verifying the controller against the supplied CA path=$CA_TRUST_PATH" >&2
 else
 	CA_BUNDLE_PATH=""
 	rm -f "$CA_TRUST_PATH" "$TRUSTSTORE_PATH"
-	echo "jenkins-agent runner: no platform CA supplied; verifying against the OS trust store" >&2
+	echo "jenkins-agent runner: no CA bundle supplied; verifying against the OS trust store" >&2
 fi
 
 controller_info=$(fetch_jenkins_controller_info)
@@ -292,11 +292,11 @@ ensure_matching_swarm_jar
 
 # The JVM replaces this shell, so the service manager's stop signal lands on the
 # Swarm client itself. -retry/-retryInterval keep it reconnecting across a
-# controller restart instead of exiting; the app is not failed for an outage it
-# is expected to ride out.
+# controller restart instead of exiting; an outage it is expected to ride out
+# does not end the service.
 #
 # The JVM does not read the OS trust store; it reads a truststore of its own. When
-# the platform handed us a chain, the client is pointed at the rebuilt copy of the
+# a CA chain was supplied, the client is pointed at the rebuilt copy of the
 # JDK's cacerts that carries it — otherwise at nothing, and the JDK's own default
 # applies. No flag here weakens verification.
 echo "jenkins-agent runner: starting the Swarm client name=$AGENT_NAME labels=$LABELS" >&2

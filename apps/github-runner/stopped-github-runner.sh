@@ -1,11 +1,12 @@
 #!/bin/sh
 set -eu
 
-# Post-exit hook: the listener is already gone, so GitHub will not refuse the
-# removal as busy. A registration made with a personal access token is released
-# on stop reason `terminate` and on nothing else — a restart or a plain stop
-# leaves this node's runner in place, because the same install starts again
-# against the same registration. One orc8r minted is orc8r's to remove.
+# Runs after the listener has exited, so GitHub will not refuse the removal as
+# busy. A registration made with a personal access token is released on stop
+# reason `terminate` and on nothing else — a restart or a plain stop leaves this
+# machine's runner in place, because the same install starts again against the
+# same registration. A JSON registration carries no credential that could remove
+# it, so only its identity files here are dropped.
 
 usage() {
 	cat <<'USAGE'
@@ -14,13 +15,13 @@ Usage: stopped-github-runner.sh [--url=URL] [--token-file=PATH] [--stop-reason=R
                                 [--retry-interval=SECONDS]
 
 Runs after the listener has exited. On --stop-reason=terminate it releases the
-runner registration (personal access token) or drops this node's runner identity
-files (a registration orc8r minted); on any other reason it keeps both.
+runner registration (personal access token) or drops this machine's runner
+identity files (a JSON registration); on any other reason it keeps both.
 
   --url=URL                 repository or organization URL (personal access token)
-  --token-file=PATH         file holding a personal access token or orc8r's
-                            minted registration (JSON)
-  --stop-reason=REASON      why the app stopped (default: exit)
+  --token-file=PATH         file holding a personal access token or a runner
+                            registration as a JSON object
+  --stop-reason=REASON      why the runner stopped (default: exit)
   --service-user=NAME       account that owns the runner (default: ghrunner)
   --attempts=N              deregistration attempts (default: 3)
   --retry-interval=SECONDS  pause between attempts (default: 5)
@@ -79,9 +80,9 @@ token_value() {
 	tr -d '\r\n' <"$token_file"
 }
 
-# The token param holds either an operator's personal access token or a
-# registration orc8r minted for this node, a JSON object. They are told apart by
-# shape: a value whose first non-blank character is `{` is the minted credential.
+# The token file holds either a personal access token or a runner registration
+# supplied as a JSON object. They are told apart by shape: a value whose first
+# non-blank character is `{` is the JSON registration.
 is_minted() {
 	trimmed=${1#"${1%%[![:space:]]*}"}
 	case "$trimmed" in
@@ -141,14 +142,14 @@ if [ -z "$credential" ]; then
 	exit 0
 fi
 
-# orc8r minted this registration and removes it itself when the node ends; the
-# node holds no credential that could. The identity files go, so a node that
-# somehow starts again registers fresh rather than running a removed identity —
-# what `config.sh remove` does on the PAT path.
+# A JSON registration comes with no credential that could remove the runner from
+# GitHub, so that is left to whoever holds one. The identity files go, so an
+# install that starts again registers fresh rather than running a removed
+# identity — what `config.sh remove` does on the PAT path.
 if is_minted "$credential"; then
-	note "minted registration; orc8r removes it, nothing to deregister here reason=$reason"
+	note "JSON registration; no credential here can remove it, nothing to deregister here reason=$reason"
 	rm -f "$work_dir/.runner" "$work_dir/.credentials" "$work_dir/.credentials_rsaparams"
-	note "removed this node's runner identity files dir=$work_dir"
+	note "removed this machine's runner identity files dir=$work_dir"
 	exit 0
 fi
 
@@ -162,7 +163,8 @@ cd "$work_dir"
 attempt=1
 while :; do
 	note "deregistering the runner reason=$reason attempt=$attempt/$attempts"
-	# A remove token is short-lived, so it is minted per attempt rather than reused.
+	# A remove token is short-lived, so it is requested per attempt rather than
+	# reused.
 	if remove_json=$(curl -fsSL -X POST \
 		-H "Accept: application/vnd.github+json" \
 		-H "Authorization: token $github_token" \

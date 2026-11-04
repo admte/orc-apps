@@ -2,8 +2,9 @@
 set -eu
 
 # Removes one version's tree. The weights cache is shared by every installed
-# version, so it goes only when the last of them does — the same line `go`,
-# `node` and `java` draw around their own trees, with the cache on our side of it.
+# version, so it goes only when the last of them does — the same line the `go`,
+# `node` and `java` apps draw around their own trees, with the cache on our side
+# of it.
 #
 # The service account is left in place: another installed version may still be
 # running as it, and a stray system account costs nothing.

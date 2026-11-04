@@ -49,17 +49,17 @@ EOF
 	chmod 0644 "$LOG_CONFIG_PATH"
 }
 
-# The password outlives the install phase: the sensitive param file is withdrawn
-# once the app has started, while the Swarm client re-reads its password on every
+# The password is copied into the agent directory: JENKINS_PASSWORD_FILE may be
+# gone by the next start, while the Swarm client re-reads its password on every
 # service restart.
 write_password_file() {
 	printf '%s' "$jenkins_password" >"$PASSWORD_FILE"
 	chmod 0600 "$PASSWORD_FILE"
 }
 
-# The runner and its helper live at a fixed path so the service definition the
-# node writes from `start:` keeps working regardless of where the app's working
-# directory lands; start-jenkins-agent.sh invokes this copy, not the packaged one.
+# The runner and its helper live at a fixed path so a service that runs
+# start-jenkins-agent.sh keeps working regardless of where these scripts were
+# unpacked; start-jenkins-agent.sh invokes this copy, not the one beside it.
 install_runner() {
 	[ -f "$SCRIPT_DIR/run-jenkins-agent.sh" ] || fail "runner script not found in $SCRIPT_DIR"
 	[ -f "$SCRIPT_DIR/jenkins-agent-common.sh" ] || fail "helper script not found in $SCRIPT_DIR"

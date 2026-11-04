@@ -1,18 +1,19 @@
 <#
 .SYNOPSIS
-Registers this node's runner if it has no identity yet, then runs the listener.
+Registers this machine's runner if it has no identity yet, then runs the listener.
 
 .DESCRIPTION
 Run from the directory install ran in. A personal access token registers under the host
-name with -Labels; a registration orc8r minted carries its own url, name and labels.
+name with -Labels; a runner registration supplied as a JSON object carries its own url,
+name and labels.
 
 .PARAMETER Url
 Repository or organization URL; used with a personal access token, ignored for a
-registration orc8r minted.
+JSON registration.
 
 .PARAMETER TokenFile
-File holding a personal access token or orc8r's minted registration (JSON); optional when
-the node is already registered.
+File holding a personal access token or a runner registration as a JSON object; optional
+when the runner is already registered.
 
 .PARAMETER Labels
 Comma-separated labels the runner carries with a personal access token.
@@ -29,14 +30,12 @@ $ErrorActionPreference = 'Stop'
 # GitHub accepts nothing older than TLS 1.2.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-# Start phase: registration is node identity, so it happens here — once per node,
-# every time a node that has none comes up — and never in install. A pool bake
-# runs the install phase alone and snapshots the disk, so a registration made
-# there would belong to a builder that is destroyed straight afterwards, and
-# `config.cmd` writes `.runner` and `.credentials` — the runner's own auth
-# material — into an image every clone shares. Install leaves the runner
-# unconfigured; this script gives the running node its own identity, then runs
-# the listener.
+# Registration gives a machine its own runner identity, so it happens here — the
+# first time the runner starts on a machine that has none — and never in install:
+# an installed disk may be imaged and copied, and `config.cmd` writes `.runner`
+# and `.credentials` — the runner's own auth material — that every copy would
+# share. Install leaves the runner unconfigured; this script registers it, then
+# runs the listener.
 
 # Returns the comma-separated labels in $value with the space around each item
 # trimmed and empty items dropped. GitHub refuses a label with a space in it or
@@ -64,43 +63,43 @@ function Get-Token {
 	return (Get-Content -Raw -LiteralPath $TokenFile).Trim()
 }
 
-# The token param holds either an operator's personal access token or a
-# registration orc8r minted for this node, a JSON object. They are told apart by
-# shape: a value whose first non-blank character is `{` is the minted credential.
+# The token file holds either a personal access token or a runner registration
+# supplied as a JSON object. They are told apart by shape: a value whose first
+# non-blank character is `{` is the JSON registration.
 function Test-Minted($value) {
 	return [bool]($value -and $value.TrimStart().StartsWith('{'))
 }
 
-# Reads a minted credential and returns its url, token, name and labels (joined by
+# Reads a JSON registration and returns its url, token, name and labels (joined by
 # commas). Two modes are understood: `persistent`, a repository runner, and
 # `persistent-org`, an organization runner whose url is `https://<host>[:port]/<org>`
 # — github.com or an Enterprise Server's own address.
-# Any other mode stops here with the message orc8r and an operator look for, so a
-# credential meant for a scope this version does not know is never registered as
-# something else. Labels are required: the runner registers with them alone,
-# without GitHub's default labels.
+# Any other mode stops here with a fixed message, so a registration meant for a
+# scope this version does not know is never registered as something else. Labels
+# are required: the runner registers with them alone, without GitHub's default
+# labels.
 function Get-MintedRegistration($value) {
 	try {
 		$cred = $value | ConvertFrom-Json
 	} catch {
-		throw "github-runner start: the minted credential is not valid JSON: $($_.Exception.Message)"
+		throw "github-runner start: the registration is not valid JSON: $($_.Exception.Message)"
 	}
 	if ($cred.mode -cnotin 'persistent', 'persistent-org') {
 		throw "github-runner: credential mode $($cred.mode) is not supported by this version"
 	}
 	foreach ($key in 'url', 'token', 'name') {
 		if (-not ($cred.$key -is [string]) -or -not $cred.$key) {
-			throw "github-runner start: the minted credential has no $key"
+			throw "github-runner start: the JSON registration has no $key"
 		}
 	}
 	$labels = @()
 	if ($null -ne $cred.labels) {
 		if (-not ($cred.labels -is [array])) {
-			throw 'github-runner start: the minted credential labels must be a list of names without commas'
+			throw 'github-runner start: the JSON registration labels must be a list of names without commas'
 		}
 		foreach ($label in @($cred.labels)) {
 			if (-not ($label -is [string]) -or -not $label -or $label.Contains(',')) {
-				throw 'github-runner start: the minted credential labels must be a list of names without commas'
+				throw 'github-runner start: the JSON registration labels must be a list of names without commas'
 			}
 			$labels += $label
 		}
@@ -112,7 +111,7 @@ function Get-MintedRegistration($value) {
 		throw 'github-runner start: a persistent-org credential url must be https://<host>/<org>'
 	}
 	if ($labels.Count -eq 0) {
-		throw 'github-runner start: the minted credential has no labels'
+		throw 'github-runner start: the JSON registration has no labels'
 	}
 	return [pscustomobject]@{
 		url    = $cred.url
@@ -177,40 +176,41 @@ $runnerName = $env:COMPUTERNAME
 $runnerLabels = $labelList -join ','
 
 # `.runner` is the file config.cmd writes when a directory has been configured; it
-# and the `.credentials` beside it are this node's identity. Absent means the node
-# has none yet — a fresh install, or the first boot of a clone whose baked image
-# carried the unpacked runner but deliberately no identity — so register. Present
-# means an ordinary service restart, and config.cmd refuses an already-configured
-# directory, so registration is skipped and the same identity is reused. With a
-# personal access token, the stopped hook's `config.cmd remove` deletes `.runner`,
-# which is what makes a terminated-then-restarted install register again rather
-# than start unconfigured.
+# and the `.credentials` beside it are this machine's identity. Absent means the
+# machine has none yet — a fresh install, or the first start on a copy of an
+# installed disk, which carries the unpacked runner but deliberately no identity —
+# so register. Present means an ordinary service restart, and config.cmd refuses an
+# already-configured directory, so registration is skipped and the same identity
+# is reused. With a personal access token, stopped-github-runner.ps1's
+# `config.cmd remove` deletes `.runner`, which is what makes a
+# terminated-then-restarted install register again rather than start
+# unconfigured.
 #
-# A registration orc8r minted carries its own url — a repository or, in the
+# A JSON registration carries its own url — a repository or, in the
 # persistent-org mode, an organization — runner name and labels, and the token in
-# it is already a registration token, so it goes to config.cmd as is; the
-# operator's -Url, the host name and -Labels are not used for it. An absent token is
-# not fatal here: a node with `.runner` starts without one, and the PAT
-# registration below fails on it by name.
+# it is already a registration token, so it goes to config.cmd as is; -Url, the
+# host name and -Labels are not used for it. An absent token is not fatal here: a
+# runner with `.runner` starts without one, and the PAT registration below fails
+# on it by name.
 try { $credential = Get-Token } catch { $credential = '' }
 $minted = Test-Minted $credential
 
 if (Test-Path (Join-Path $workDir '.runner')) {
 	$registered = Get-RegisteredName (Join-Path $workDir '.runner')
 	if ($registered) { $runnerName = $registered }
-	Write-Host "github-runner start: already registered; reusing this node's identity name=$runnerName dir=$workDir"
+	Write-Host "github-runner start: already registered; reusing this machine's identity name=$runnerName dir=$workDir"
 } elseif ($minted) {
 	$registration = Get-MintedRegistration $credential
 	$runnerName = $registration.name
 	$runnerLabels = $registration.labels
 
-	# Only the credential's labels, none of GitHub's defaults: a job elsewhere in the
-	# repository or organization that asks for `self-hosted`, an OS or an
-	# architecture must not land on a machine orc8r runs for one pool.
+	# Only the registration's labels, none of GitHub's defaults: a job elsewhere in
+	# the repository or organization that asks for `self-hosted`, an OS or an
+	# architecture must not land on a runner meant only for these labels.
 	$configArgs = @('--unattended', '--url', $registration.url, '--token', $registration.token, '--name', $runnerName,
 		'--no-default-labels', '--labels', $runnerLabels, '--replace')
 
-	Write-Host "github-runner start: registering with the minted registration name=$runnerName labels=$runnerLabels"
+	Write-Host "github-runner start: registering with the JSON registration name=$runnerName labels=$runnerLabels"
 	& .\config.cmd @configArgs
 	if ($LASTEXITCODE -ne 0) {
 		throw "github-runner start: config.cmd failed with exit code $LASTEXITCODE"
@@ -219,7 +219,7 @@ if (Test-Path (Join-Path $workDir '.runner')) {
 	if (-not $Url) {
 		throw 'github-runner start: -Url is required'
 	}
-	# A registration token is short-lived, so it is minted at the moment it is
+	# A registration token is short-lived, so it is requested at the moment it is
 	# used and never persisted.
 	$registration = Invoke-RestMethod -Method Post `
 		-Headers @{ Accept = 'application/vnd.github+json'; Authorization = "token $(Get-Token)" } `
@@ -242,13 +242,13 @@ if (Test-Path (Join-Path $workDir '.runner')) {
 
 # Puts the labels back. stop-github-runner.ps1 takes them off through the API so
 # the queue stops routing work here during a drain, and the registration itself
-# outlives every stop reason but `terminate` — so a drained node would otherwise
+# outlives every stop reason but `terminate` — so a drained runner would otherwise
 # come back online carrying only its default labels, and `runs-on: <label>` would
 # never match it again: healthy-looking, and silently never given another job.
 # POST .../labels adds without replacing, so this runs on both PAT paths above,
 # whether config.cmd just passed --labels or the registration was already there.
-# It is never fatal: a runner with no labels still beats a node that will not start.
-# A minted registration set its labels at registration and holds no API
+# It is never fatal: a runner with no labels still beats one that will not start.
+# A JSON registration set its labels at registration and holds no API
 # credential, so there is nothing to restore: stop leaves them alone too.
 if ($minted) {
 	Write-Host "github-runner start: labels were set at registration; no label upkeep name=$runnerName"
@@ -273,8 +273,8 @@ if ($minted) {
 	}
 }
 
-# The listener runs as the account the runtime runs as; there is no unprivileged-user
-# rule to satisfy on Windows.
+# The listener runs as the account that runs this script; there is no
+# unprivileged-user rule to satisfy on Windows.
 Write-Host "github-runner start: starting the listener name=$runnerName dir=$workDir"
 & .\run.cmd
 exit $LASTEXITCODE

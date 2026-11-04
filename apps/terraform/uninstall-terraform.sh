@@ -9,7 +9,7 @@ version=${APP_VERSION:-${TERRAFORM_VERSION:-}}
 version=${version#v}
 
 if [ -z "$version" ]; then
-	# The install ran without a resolved version and picked the then-current
+	# The install ran without APP_VERSION and picked the then-current
 	# release, so the tree the exposure symlink points at is the one to remove.
 	target=$(readlink "$link" 2>/dev/null || true)
 	case "$target" in

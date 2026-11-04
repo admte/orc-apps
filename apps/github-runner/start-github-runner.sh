@@ -1,27 +1,26 @@
 #!/bin/sh
 set -eu
 
-# Start phase: registration is node identity, so it happens here — once per node,
-# every time a node that has none comes up — and never in install. A pool bake
-# runs the install phase alone and snapshots the disk, so a registration made
-# there would belong to a builder that is destroyed straight afterwards, and
-# `config.sh` writes `.runner` and `.credentials` — the runner's own auth
-# material — into an image every clone shares. Install leaves the runner
-# unconfigured; this script gives the running node its own identity, then becomes
-# the listener.
+# Registration gives a machine its own runner identity, so it happens here — the
+# first time the runner starts on a machine that has none — and never in install:
+# an installed disk may be imaged and copied, and `config.sh` writes `.runner`
+# and `.credentials` — the runner's own auth material — that every copy would
+# share. Install leaves the runner unconfigured; this script registers it, then
+# becomes the listener.
 
 usage() {
 	cat <<'USAGE'
 Usage: start-github-runner.sh [--url=URL] [--token-file=PATH] [--labels=LIST]
                               [--service-user=NAME]
 
-Registers this node's runner if it has no identity yet, then becomes the
+Registers this machine's runner if it has no identity yet, then becomes the
 listener. Run as root from the directory install ran in.
 
   --url=URL            repository or organization URL; used with a personal
-                       access token, ignored for a registration orc8r minted
-  --token-file=PATH    file holding a personal access token or orc8r's minted
-                       registration (JSON); optional when already registered
+                       access token, ignored for a JSON registration
+  --token-file=PATH    file holding a personal access token or a runner
+                       registration as a JSON object; optional when already
+                       registered
   --labels=LIST        comma-separated labels the runner carries with a personal
                        access token
   --service-user=NAME  account the listener runs as (default: ghrunner)
@@ -94,9 +93,9 @@ token_value() {
 	tr -d '\r\n' <"$token_file"
 }
 
-# The token param holds either an operator's personal access token or a
-# registration orc8r minted for this node, a JSON object. They are told apart by
-# shape: a value whose first non-blank character is `{` is the minted credential.
+# The token file holds either a personal access token or a runner registration
+# supplied as a JSON object. They are told apart by shape: a value whose first
+# non-blank character is `{` is the JSON registration.
 is_minted() {
 	trimmed=${1#"${1%%[![:space:]]*}"}
 	case "$trimmed" in
@@ -105,14 +104,13 @@ is_minted() {
 	esac
 }
 
-# Reads a minted credential from stdin and prints its url, token, name and labels
+# Reads a JSON registration from stdin and prints its url, token, name and labels
 # (joined by commas), one per line. Two modes are understood: `persistent`, a
 # repository runner, and `persistent-org`, an organization runner whose url is
 # `https://<host>[:port]/<org>`, on github.com or an Enterprise Server. Any other
-# mode stops here with the message orc8r and an operator look for, so a credential
-# meant for a scope this version does not know is never registered as something
-# else. Labels are required: the runner
-# registers with them alone, without GitHub's default labels.
+# mode stops here with a fixed message, so a registration meant for a scope this
+# version does not know is never registered as something else. Labels are
+# required: the runner registers with them alone, without GitHub's default labels.
 minted_registration() {
 	python3 -c '
 import json, re, sys
@@ -122,9 +120,9 @@ def die(message):
 try:
     cred = json.load(sys.stdin)
 except ValueError as err:
-    die("github-runner start: the minted credential is not valid JSON: %s" % err)
+    die("github-runner start: the registration is not valid JSON: %s" % err)
 if not isinstance(cred, dict):
-    die("github-runner start: the minted credential is not a JSON object")
+    die("github-runner start: the registration is not a JSON object")
 mode = cred.get("mode")
 if mode not in ("persistent", "persistent-org"):
     die("github-runner: credential mode %s is not supported by this version" % mode)
@@ -132,7 +130,7 @@ fields = []
 for key in ("url", "token", "name"):
     value = cred.get(key)
     if not isinstance(value, str) or not value:
-        die("github-runner start: the minted credential has no %s" % key)
+        die("github-runner start: the JSON registration has no %s" % key)
     fields.append(value)
 # https, a host with an optional port, then exactly one path segment (the org) and
 # at most one trailing slash; no query or fragment. Kept as one pattern so the ps1
@@ -142,14 +140,14 @@ if mode == "persistent-org" and not re.fullmatch(org_url, fields[0]):
     die("github-runner start: a persistent-org credential url must be https://<host>/<org>")
 labels = cred.get("labels") or []
 if not isinstance(labels, list) or not all(isinstance(l, str) and l for l in labels):
-    die("github-runner start: the minted credential labels must be a list of names")
+    die("github-runner start: the JSON registration labels must be a list of names")
 if not labels:
-    die("github-runner start: the minted credential has no labels")
+    die("github-runner start: the JSON registration has no labels")
 if any("," in l for l in labels):
-    die("github-runner start: a minted credential label contains a comma")
+    die("github-runner start: a JSON registration label contains a comma")
 fields.append(",".join(labels))
 if any("\n" in f or "\r" in f for f in fields):
-    die("github-runner start: a minted credential field contains a line break")
+    die("github-runner start: a JSON registration field contains a line break")
 print("\n".join(fields))
 '
 }
@@ -221,15 +219,15 @@ label_payload() {
 
 # Puts the labels back. stop-github-runner.sh takes them off through the API so
 # the queue stops routing work here during a drain, and the registration itself
-# outlives every stop reason but `terminate` — so a drained node would otherwise
+# outlives every stop reason but `terminate` — so a drained runner would otherwise
 # come back online carrying only its default labels, and `runs-on: <label>` would
 # never match it again: healthy-looking, and silently never given another job.
 # POST .../labels adds without replacing, so this is safe to run whether the
 # config.sh above just passed --labels or the registration was already there.
 #
 # Every step fails explicitly, because the caller runs this in a subshell whose
-# failure is only logged: a runner with no labels still beats a node that will
-# not start.
+# failure is only logged: a runner with no labels still beats one that will not
+# start.
 ensure_labels() {
 	github_token=$(token_value) || exit 1
 	api_path=$(github_api_path) || exit 1
@@ -245,9 +243,10 @@ ensure_labels() {
 	note "labels ensured name=$runner_name id=$runner_id labels=$labels"
 }
 
-# setpriv, never su or runuser: those start a new session, which is what puts an
-# app outside the process group the runtime signals. The account has no home
-# directory, so HOME points at the runner directory it owns.
+# setpriv, never su or runuser: those start a new session, which would take the
+# runner out of this script's process group, so a signal sent to the group would
+# miss it. The account has no home directory, so HOME points at the runner
+# directory it owns.
 # Prints the name a configured directory registered under, from the agentName in
 # `.runner` (which config.sh writes with a UTF-8 BOM), or nothing if unreadable.
 registered_name() {
@@ -277,26 +276,26 @@ work_dir=github-runner
 work_dir=$(CDPATH= cd -- "$work_dir" && pwd)
 cd "$work_dir"
 
-# The runner name is the host name (a pool member is `<pool>-<slot>`). Its labels
-# are --labels, parsed above.
+# The runner name is the host name. Its labels are --labels, parsed above.
 runner_name=$(hostname)
 
 # `.runner` is the file config.sh writes when a directory has been configured; it
-# and the `.credentials` beside it are this node's identity. Absent means the node
-# has none yet — a fresh install, or the first boot of a clone whose baked image
-# carried the unpacked runner but deliberately no identity — so register. Present
-# means an ordinary service restart, and config.sh refuses an already-configured
-# directory, so registration is skipped and the same identity is reused. With a
-# personal access token, the stopped hook's `config.sh remove` deletes `.runner`,
-# which is what makes a terminated-then-restarted install register again rather
-# than start unconfigured.
+# and the `.credentials` beside it are this machine's identity. Absent means the
+# machine has none yet — a fresh install, or the first start on a copy of an
+# installed disk, which carries the unpacked runner but deliberately no identity —
+# so register. Present means an ordinary service restart, and config.sh refuses an
+# already-configured directory, so registration is skipped and the same identity
+# is reused. With a personal access token, stopped-github-runner.sh's
+# `config.sh remove` deletes `.runner`, which is what makes a
+# terminated-then-restarted install register again rather than start
+# unconfigured.
 #
-# A registration orc8r minted carries its own url — a repository or, in the
+# A JSON registration carries its own url — a repository or, in the
 # persistent-org mode, an organization — runner name and labels, and the token in
-# it is already a registration token, so it goes to config.sh as is; the
-# operator's --url, the host name and --labels are not used for it. An absent token
-# is not fatal here: a node with `.runner` starts without one, and the PAT
-# registration below fails on it by name.
+# it is already a registration token, so it goes to config.sh as is; --url, the
+# host name and --labels are not used for it. An absent token is not fatal here:
+# a runner with `.runner` starts without one, and the PAT registration below fails
+# on it by name.
 credential=$(token_value 2>/dev/null) || credential=
 if is_minted "$credential"; then
 	minted=yes
@@ -307,7 +306,7 @@ fi
 if [ -f .runner ]; then
 	registered=$(registered_name)
 	runner_name=${registered:-$runner_name}
-	note "already registered; reusing this node's identity name=$runner_name dir=$work_dir"
+	note "already registered; reusing this machine's identity name=$runner_name dir=$work_dir"
 elif [ "$minted" = yes ]; then
 	registration=$(printf '%s' "$credential" | minted_registration) || exit 1
 	minted_url=$(printf '%s\n' "$registration" | sed -n 1p)
@@ -315,20 +314,20 @@ elif [ "$minted" = yes ]; then
 	runner_name=$(printf '%s\n' "$registration" | sed -n 3p)
 	labels=$(printf '%s\n' "$registration" | sed -n 4p)
 
-	# Only the credential's labels, none of GitHub's defaults: a job elsewhere in
+	# Only the registration's labels, none of GitHub's defaults: a job elsewhere in
 	# the repository or organization that asks for `self-hosted`, an OS or an
-	# architecture must not land on a machine orc8r runs for one pool.
+	# architecture must not land on a runner meant only for these labels.
 	set -- --unattended --url "$minted_url" --token "$minted_token" --name "$runner_name" \
 		--no-default-labels --labels "$labels" --replace
 
-	note "registering with the minted registration name=$runner_name labels=$labels user=$service_user"
+	note "registering with the JSON registration name=$runner_name labels=$labels user=$service_user"
 	as_service_user ./config.sh "$@"
 else
 	[ -n "$repo_url" ] || fail "--url is required"
 	github_token=$(token_value)
 	api_path=$(github_api_path)
 
-	# A registration token is short-lived, so it is minted at the moment it is
+	# A registration token is short-lived, so it is requested at the moment it is
 	# used and never persisted.
 	registration_json=$(curl -fsSL -X POST \
 		-H "Accept: application/vnd.github+json" \
@@ -348,7 +347,7 @@ else
 fi
 
 # Runs on both PAT paths, and never fatally: the subshell contains a hard failure
-# from anything inside, so the listener starts either way. A minted registration
+# from anything inside, so the listener starts either way. A JSON registration
 # set its labels at registration and holds no API credential, so there is nothing
 # to restore: stop leaves them alone too.
 if [ "$minted" = yes ]; then

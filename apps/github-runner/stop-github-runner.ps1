@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Drains this node's runner, then exits 0 with the listener still running.
+Drains this machine's runner, then exits 0 with the listener still running.
 
 .DESCRIPTION
 With a personal access token, takes the labels off so no new job is routed here; in
@@ -10,7 +10,7 @@ either mode, waits for the job in flight to finish. Leaves the registration in p
 Repository or organization URL (personal access token).
 
 .PARAMETER TokenFile
-File holding a personal access token or orc8r's minted registration (JSON).
+File holding a personal access token or a runner registration as a JSON object.
 
 .PARAMETER Labels
 Comma-separated labels to take off (personal access token).
@@ -26,8 +26,8 @@ param(
 	[string]$Url = '',
 	[string]$TokenFile = '',
 	[string]$Labels = '',
-	# Kept under the 1h stop.timeout so the wait ends with a message of its own
-	# rather than being cut off mid-poll.
+	# Just under an hour, so a stop that is given an hour ends with a message of its
+	# own rather than being cut off mid-poll.
 	[string]$JobTimeout = '3540',
 	[string]$PollInterval = '10'
 )
@@ -37,11 +37,12 @@ $ErrorActionPreference = 'Stop'
 # GitHub accepts nothing older than TLS 1.2.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-# Quiesce hook: the listener is still running and may be mid-job. With a personal
-# access token, take this app's labels off the runner so the queue stops routing
+# Runs before the listener is stopped, while it may still be mid-job. With a
+# personal access token, take -Labels off the runner so the queue stops routing
 # work here; in either mode, wait for the worker that is already running to finish,
-# then exit 0. Stopping the listener is the runtime's next step; deregistering is
-# stopped-github-runner.ps1's, and only when the node is going away for good.
+# then exit 0. The listener is left running, to be stopped once this exits;
+# deregistering is stopped-github-runner.ps1's, and only when the runner is going
+# away for good.
 
 if ($JobTimeout -notmatch '\A[0-9]+\z') {
 	throw 'github-runner stop: -JobTimeout must be a whole number of seconds'
@@ -78,9 +79,9 @@ function Get-Token {
 	return (Get-Content -Raw -LiteralPath $TokenFile).Trim()
 }
 
-# The token param holds either an operator's personal access token or a
-# registration orc8r minted for this node, a JSON object. They are told apart by
-# shape: a value whose first non-blank character is `{` is the minted credential.
+# The token file holds either a personal access token or a runner registration
+# supplied as a JSON object. They are told apart by shape: a value whose first
+# non-blank character is `{` is the JSON registration.
 function Test-Minted($value) {
 	return [bool]($value -and $value.TrimStart().StartsWith('{'))
 }
@@ -145,13 +146,13 @@ $runnerName = $env:COMPUTERNAME
 # the wait for the current job below still holds.
 try { $credential = Get-Token } catch { $credential = '' }
 
-# A minted registration holds no API credential and set its labels when it
-# registered, so there are no labels to take off: the service stop, once the job
-# below has finished, is what stops the listener taking another.
+# A JSON registration holds no API credential and set its labels when it
+# registered, so there are no labels to take off: stopping the service once the
+# job below has finished is what keeps the listener from taking another.
 if (-not $credential) {
 	Write-Host "github-runner stop: no credential available; skipping the label step name=$runnerName"
 } elseif (Test-Minted $credential) {
-	Write-Host "github-runner stop: minted registration; no labels to remove, relying on the service stop name=$runnerName"
+	Write-Host "github-runner stop: JSON registration; no labels to remove, relying on the service stop name=$runnerName"
 } elseif ($labelList.Count -eq 0) {
 	Write-Host "github-runner stop: no labels to remove; relying on the service stop name=$runnerName"
 } else {
