@@ -1,9 +1,8 @@
 artifactType: application/vnd.orc8r.app.v2
 annotations:
   org.opencontainers.image.title: github-runner
-  # Format v2 is a new version: it publishes as 2.0.0, and `default` stays on the v1
-  # package until the zone's hosts run v2 (spec 214 Rollout).
-  org.opencontainers.image.version: 2.0.0
+  # No version: install always downloads the latest runner, and an app's version is the
+  # version of the software it installs, never of its manifest or scripts.
   org.opencontainers.image.description: GitHub Actions self-hosted runner
 config:
   params:
