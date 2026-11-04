@@ -17,9 +17,26 @@ github-runner/
   stopped-github-runner.ps1
 ```
 
-Lifecycle scripts follow the `<phase>-github-runner.<ext>` naming convention. The app ships
-`install`, `start`, `stop`, and `stopped` scripts for both platforms and no explicit command
-for any phase, so each one resolves from the package by name and per platform.
+The app is format v2 (`application/vnd.orc8r.app.v2`): every phase names the script it runs
+and passes each value it needs as one flag, `--name=value` on Unix and `-Name:value` in
+PowerShell. Nothing app-specific is in a phase's environment, so the listener, and every job it
+runs, inherits none of the app's configuration. The token is sensitive and reaches a phase only
+as the path of a `0600` file, `${token_file}`; its value never appears in argv.
+
+| Phase | Unix flags | Windows parameters |
+|---|---|---|
+| install | `--os`, `--arch` (build time) | `-Arch` (build time) |
+| start | `--url`, `--token-file`, `--pool` | `-Url`, `-TokenFile`, `-Pool` |
+| stop | `--url`, `--token-file`, `--pool` | `-Url`, `-TokenFile`, `-Pool` |
+| stopped | `--url`, `--token-file`, `--stop-reason` | `-Url`, `-TokenFile`, `-StopReason` |
+
+A value that is unset, `pool` with no pool or `token` before one is minted, drops its flag. The
+scripts also take knobs the manifest does not pass, each with its default: `--service-user`
+(`ghrunner`; install, start, stopped), `--job-timeout` (`3540`) and `--poll-interval` (`10`) on
+stop, `--attempts` (`3`) and `--retry-interval` (`5`) on stopped; on Windows `-JobTimeout`,
+`-PollInterval`, `-Attempts`, `-RetryInterval`. Each `.sh` answers `--help`, exits 2 on an
+argument it does not know, and runs under any POSIX `sh`; each `.ps1` has comment help
+(`Get-Help .\start-github-runner.ps1 -Detailed`) and refuses a parameter it does not declare.
 
 `linux/amd64`, `linux/arm64`, and `windows/amd64`. macOS is not in the manifest: the runtime
 has systemd and Windows SCM backends today, and darwin returns to the list when the launchd
@@ -61,22 +78,20 @@ instead. The runner installs under `github-runner` in the app's working director
 
 ## Lifecycle
 
-**install** creates the `ghrunner` service account on Linux, downloads the runner build
-GitHub's service asks for (with a personal access token), or the latest release from GitHub's
-public release metadata (with a minted registration, or none — install needs no credential
-then), verifies its published checksum, unpacks it under `github-runner`, and hands it to the
-service account. That is the whole of it: it does **not** register the runner, and the unpacked
-directory it leaves behind is unconfigured. It registers no service either — the node owns the
-service definition and generates it from `start:`, so `svc.sh install` and `config.cmd
---runasservice` are deliberately not used.
+**install** creates the `ghrunner` service account on Linux, downloads the latest runner
+release for the platform it was built for (from GitHub's public release metadata, so it needs
+no url and no credential), verifies its published checksum, unpacks it under `github-runner`,
+and hands it to the service account. That is the whole of it: it does **not** register the
+runner, and the unpacked directory it leaves behind is unconfigured. It registers no service
+either — the node owns the service definition and generates it from `start:`, so
+`svc.sh install` and `config.cmd --runasservice` are deliberately not used.
 
 Registration happens at start, so installation leaves no runner identity or registration
 credentials in the unpacked directory.
 
-**start** (`start-github-runner.{sh,ps1}`) is a runtime-managed service: the package ships a
-start script and `artifact.yaml` names `start.service: github-runner`, and a start command that
-resolves — from config or, as here, from a packaged script — together with a `service` name is
-what selects runtime-managed service mode.
+**start** (`start-github-runner.{sh,ps1}`) is a runtime-managed service: `artifact.yaml` gives
+`start` both a `command` and `service: github-runner`, which is what selects runtime-managed
+service mode.
 
 The script registers, then becomes the listener. It looks for `.runner` in the runner
 directory, the file `config.sh` writes once a directory is configured. If it is missing,
@@ -135,10 +150,10 @@ still be routed to this runner between the label removal and the stop signal. Th
 back on the next start, which re-adds it through the API, so a drained runner rejoins its pool.
 
 **stopped** (`stopped-github-runner.{sh,ps1}`, `timeout: 120s`) runs after every exit and
-looks at `APP_STOP_REASON`. On `terminate` — the node is ending and this install will never
-start again — it mints a remove token and runs `config.sh remove`, retrying a few times on a
-transient API error; the listener is already gone by then, so GitHub does not refuse the
-removal as busy. On every other reason (`restart`, `stop`, `shutdown`, `exit`) it exits 0
+looks at the stop reason it is passed. On `terminate` — the node is ending and this install
+will never start again — it mints a remove token and runs `config.sh remove`, retrying a few
+times on a transient API error; the listener is already gone by then, so GitHub does not refuse
+the removal as busy. On every other reason (`restart`, `stop`, `shutdown`, `exit`) it exits 0
 immediately and leaves the registration intact, because the same install starts again against
 it and start reuses it on sight of `.runner`. That is the personal-access-token path: a minted
 registration is orc8r's to remove, so on `terminate` the hook only deletes `.runner`,
@@ -155,72 +170,69 @@ identity and the label are both whole again by the time the listener comes up.
 
 ## Build + Push
 
-From the repo root, after `./scripts/install.sh` and `./orc login ghcr.io`:
+From the repo root, after `./scripts/install.sh` and `./orc login ghcr.io`, with an orc that
+builds format v2:
 
 ```bash
 ./orc build ./apps/github-runner --push
 ```
 
-Validate locally without pushing:
+This publishes `github-runner:2.0.0`; `default` stays on the v1 package until the zone's hosts
+run v2, so a pool pins `github-runner:2.0.0` until then. Validate locally without pushing:
 
 ```bash
 ./orc build ./apps/github-runner --output /tmp/github-runner-oci
 ```
 
-Pull the published artifact to verify its payload:
-
-```bash
-./orc pull github-runner:default /tmp/github-runner-pull
-find /tmp/github-runner-pull -maxdepth 2 -type f -print
-```
-
 ## Manual test
 
-Requires root and a GitHub token for the target repository or organization:
+Every script runs by hand the way the manifest runs it; `--help` lists its flags:
 
 ```bash
-# downloads and unpacks only; leaves the runner unconfigured
-sudo env \
-  URL=https://github.com/org/repo \
-  TOKEN=ghp_... \
-  sh install-github-runner.sh
-
-# what the generated service runs: registers on first start, then execs the listener
-sudo env \
-  URL=https://github.com/org/repo \
-  TOKEN=ghp_... \
-  POOL=my-pool \
-  sh start-github-runner.sh
+./start-github-runner.sh --help
 ```
 
-Run it twice: the first run logs `registering`, the second finds `.runner` and logs
-`already registered`. Both runs log `pool label ensured`.
-
-To try a minted registration, put the JSON in a file and pass `TOKEN_FILE` instead of `TOKEN`;
-the registration token in it comes from `POST .../actions/runners/registration-token` and lasts
-an hour:
+Requires root and, on the personal-access-token path, a GitHub token for the target repository
+or organization, in a file:
 
 ```bash
-cat >/tmp/cred <<'EOF'
+printf '%s\n' ghp_... >/root/gh-token && chmod 600 /root/gh-token
+
+# downloads and unpacks only; leaves the runner unconfigured
+sudo ./install-github-runner.sh --os=linux --arch=amd64
+
+# what the generated service runs: registers on first start, then execs the listener
+sudo ./start-github-runner.sh --url=https://github.com/org/repo \
+  --token-file=/root/gh-token --pool=my-pool
+```
+
+Run start twice: the first run logs `registering`, the second finds `.runner` and logs
+`already registered`. Both runs log `pool label ensured`.
+
+To try a minted registration, put the JSON in the token file instead; the registration token in
+it comes from `POST .../actions/runners/registration-token` and lasts an hour:
+
+```bash
+cat >/root/gh-cred <<'EOF'
 {"mode":"persistent","url":"https://github.com/org/repo","token":"A...",
  "name":"my-runner","labels":["my-pool"]}
 EOF
-sudo env TOKEN_FILE=/tmp/cred sh start-github-runner.sh
+sudo ./start-github-runner.sh --url=https://github.com/org/repo --token-file=/root/gh-cred
 ```
 
 Start a workflow job on the runner, then in another shell drain it — the script removes the
 label, waits for the job, and leaves the listener running:
 
 ```bash
-sudo env URL=https://github.com/org/repo TOKEN=ghp_... POOL=my-pool \
-  sh stop-github-runner.sh
+sudo ./stop-github-runner.sh --url=https://github.com/org/repo \
+  --token-file=/root/gh-token --pool=my-pool
 ```
 
 Deregistration is a separate step, and only happens for a terminating node:
 
 ```bash
-sudo env URL=https://github.com/org/repo TOKEN=ghp_... APP_STOP_REASON=stop \
-  sh stopped-github-runner.sh      # keeps the registration
-sudo env URL=https://github.com/org/repo TOKEN=ghp_... APP_STOP_REASON=terminate \
-  sh stopped-github-runner.sh      # removes it
+sudo ./stopped-github-runner.sh --url=https://github.com/org/repo \
+  --token-file=/root/gh-token --stop-reason=stop        # keeps the registration
+sudo ./stopped-github-runner.sh --url=https://github.com/org/repo \
+  --token-file=/root/gh-token --stop-reason=terminate   # removes it
 ```
