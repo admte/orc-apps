@@ -1,16 +1,33 @@
 $ErrorActionPreference = 'Stop'
 
-if (-not $env:APP_VERSION) {
-	throw 'go uninstall: APP_VERSION is required'
+if (-not $env:ProgramFiles) {
+	throw 'go uninstall: ProgramFiles is required'
 }
 
-$version = $env:APP_VERSION -replace '^go', ''
-if ($version -notmatch '^\d+\.\d+(\.\d+)?$') {
-	throw "go uninstall: invalid APP_VERSION: $env:APP_VERSION"
-}
 $root = Join-Path $env:ProgramFiles 'go'
-$prefix = Join-Path $root $version
 $current = Join-Path $root 'current'
+
+$version = $env:APP_VERSION -replace '^go', ''
+if (-not $version) {
+	# The install ran without a resolved version and took the then-newest
+	# release, so the tree the junction points at is the one to remove.
+	if (-not (Test-Path -LiteralPath $current)) {
+		Write-Host 'go uninstall: no installed version to remove'
+		exit 0
+	}
+	$item = Get-Item -LiteralPath $current -Force
+	if (-not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+		Write-Host "go uninstall: $current is not a junction; leaving it in place"
+		exit 0
+	}
+	$version = Split-Path -Leaf ([string] $item.Target)
+	Write-Host "go uninstall: no version was requested; removing $version, the version the junction points at"
+}
+if ($version -notmatch '^\d+\.\d+(\.\d+)?$') {
+	throw "go uninstall: invalid version: $version"
+}
+
+$prefix = Join-Path $root $version
 $pathEntry = Join-Path $current 'bin'
 
 if (Test-Path -LiteralPath $current) {
