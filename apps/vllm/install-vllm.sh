@@ -6,12 +6,47 @@ set -eu
 # that belongs to start-vllm.sh, so one install can serve whichever model each
 # start asks for.
 
-SERVICE_USER=${SERVICE_USER:-vllm}
+usage() {
+	cat <<'USAGE'
+Usage: install-vllm.sh --version=VERSION [--install-root=DIR] [--service-user=NAME]
+
+Installs one vLLM release into its own virtual environment under the install
+root, and creates the account the server runs as. Run as root.
+
+  --version=VERSION    vLLM release to install, e.g. 0.11.0
+  --install-root=DIR   directory each release is installed under, beside the
+                       shared weights cache (default: /opt/vllm)
+  --service-user=NAME  account the server runs as (default: vllm)
+  --help               show this help
+USAGE
+}
 
 fail() {
 	echo "vllm install: $*" >&2
 	exit 1
 }
+
+usage_error() {
+	echo "vllm install: $*" >&2
+	usage >&2
+	exit 2
+}
+
+version=
+root=/opt/vllm
+service_user=vllm
+for arg; do
+	case $arg in
+	--version=*) version=${arg#--version=} ;;
+	--install-root=*) root=${arg#--install-root=} ;;
+	--service-user=*) service_user=${arg#--service-user=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+[ -n "$version" ] || usage_error "--version is required"
+[ -n "$root" ] || usage_error "--install-root must not be empty"
+[ -n "$service_user" ] || usage_error "--service-user must not be empty"
 
 # Progress goes to stdout and only warnings and errors to stderr, so a healthy
 # install writes nothing there.
@@ -113,12 +148,10 @@ need python3
 # rather than at the first start.
 need setpriv
 
-[ -n "${APP_VERSION:-}" ] || fail "APP_VERSION is required"
-printf '%s' "$APP_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' ||
-	fail "invalid APP_VERSION: $APP_VERSION"
+printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' ||
+	fail "invalid version: $version"
 
-root=${VLLM_INSTALL_ROOT:-/opt/vllm}
-prefix="$root/$APP_VERSION"
+prefix="$root/$version"
 venv="$prefix/venv"
 # Beside the versions rather than inside one: an upgrade, a re-install or a
 # repair must not throw away weights that take hours to fetch.
@@ -126,10 +159,10 @@ cache="$root/cache"
 
 # The server should not answer the network as root. Created here so start can
 # drop to it.
-if ! id "$SERVICE_USER" >/dev/null 2>&1; then
+if ! id "$service_user" >/dev/null 2>&1; then
 	need useradd
-	useradd -r -U -M -s /usr/sbin/nologin "$SERVICE_USER" ||
-		fail "could not create the service user $SERVICE_USER"
+	useradd -r -U -M -s /usr/sbin/nologin "$service_user" ||
+		fail "could not create the service user $service_user"
 fi
 
 # A GPU is not needed to install, but a machine without one will never serve, and
@@ -159,13 +192,13 @@ fi
 ensure_compiler
 
 # pip verifies every wheel it installs against the hash the index publishes, and
-# the version is pinned exactly, so the machine gets the release APP_VERSION names
+# the version is pinned exactly, so the machine gets the release --version names
 # and nothing newer.
-note "installing vllm==$APP_VERSION — the wheel and its CUDA payload are gigabytes"
+note "installing vllm==$version — the wheel and its CUDA payload are gigabytes"
 "$venv/bin/pip" install --no-cache-dir --upgrade pip >/dev/null ||
 	fail "could not update pip in $venv"
-"$venv/bin/pip" install --no-cache-dir "vllm==$APP_VERSION" ||
-	fail "could not install vllm==$APP_VERSION"
+"$venv/bin/pip" install --no-cache-dir "vllm==$version" ||
+	fail "could not install vllm==$version"
 
 [ -x "$venv/bin/vllm" ] || fail "the wheel installed no vllm command in $venv/bin"
 
@@ -189,19 +222,19 @@ if [ -n "$flashinfer" ]; then
 fi
 
 installed=$("$venv/bin/pip" show vllm 2>/dev/null | sed -n 's/^Version: //p')
-[ "$installed" = "$APP_VERSION" ] ||
-	fail "installed version '$installed' does not match $APP_VERSION"
+[ "$installed" = "$version" ] ||
+	fail "installed version '$installed' does not match $version"
 
-chown -R "$SERVICE_USER:$SERVICE_USER" "$prefix" ||
-	fail "could not give $prefix to $SERVICE_USER"
+chown -R "$service_user:$service_user" "$prefix" ||
+	fail "could not give $prefix to $service_user"
 
 # Shared by every installed version, so changing version does not download the
 # same model again.
 mkdir -p "$cache"
-chown "$SERVICE_USER:$SERVICE_USER" "$cache" ||
-	fail "could not give $cache to $SERVICE_USER"
+chown "$service_user:$service_user" "$cache" ||
+	fail "could not give $cache to $service_user"
 
-# So start-vllm.sh also works without APP_VERSION set. Whichever version was
+# So start-vllm.sh also works without --version. Whichever version was
 # installed last is what `current` names.
 if [ -e "$root/current" ] && [ ! -L "$root/current" ]; then
 	fail "$root/current exists and is not a symlink; remove it and re-install"

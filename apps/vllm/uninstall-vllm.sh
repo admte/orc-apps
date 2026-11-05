@@ -9,6 +9,19 @@ set -eu
 # The service account is left in place: another installed version may still be
 # running as it, and a stray system account costs nothing.
 
+usage() {
+	cat <<'USAGE'
+Usage: uninstall-vllm.sh --version=VERSION [--install-root=DIR]
+
+Removes one vLLM release that install-vllm.sh installed, and the shared weights
+cache with the last of them.
+
+  --version=VERSION   vLLM release to remove, e.g. 0.11.0
+  --install-root=DIR  directory each release is installed under (default: /opt/vllm)
+  --help              show this help
+USAGE
+}
+
 note() {
 	echo "vllm uninstall: $*"
 }
@@ -18,12 +31,29 @@ fail() {
 	exit 1
 }
 
-[ -n "${APP_VERSION:-}" ] || fail "APP_VERSION is required"
-printf '%s' "$APP_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' ||
-	fail "invalid APP_VERSION: $APP_VERSION"
+usage_error() {
+	echo "vllm uninstall: $*" >&2
+	usage >&2
+	exit 2
+}
 
-root=${VLLM_INSTALL_ROOT:-/opt/vllm}
-prefix="$root/$APP_VERSION"
+version=
+root=/opt/vllm
+for arg; do
+	case $arg in
+	--version=*) version=${arg#--version=} ;;
+	--install-root=*) root=${arg#--install-root=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+[ -n "$version" ] || usage_error "--version is required"
+[ -n "$root" ] || usage_error "--install-root must not be empty"
+
+printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' ||
+	fail "invalid version: $version"
+
+prefix="$root/$version"
 
 if [ -d "$prefix" ]; then
 	rm -rf "$prefix" || fail "could not remove $prefix"

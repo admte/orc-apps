@@ -2,15 +2,75 @@
 set -eu
 
 # Serves one model over vLLM's OpenAI-compatible API. Everything the server is
-# told is either MODEL and the optional Hugging Face token, or derived from the
+# told is either --model and the optional Hugging Face token, or derived from the
 # machine itself.
 
-SERVICE_USER=${SERVICE_USER:-vllm}
+usage() {
+	cat <<'USAGE'
+Usage: start-vllm.sh --model=MODEL [--version=VERSION] [--hf-token-file=PATH]
+                     [--install-root=DIR] [--service-user=NAME] [--port=PORT]
+
+Serves one model over vLLM's OpenAI-compatible API on every GPU this machine
+has, as the service account. Run as root, after install.
+
+  --model=MODEL        Hugging Face model to serve, or a path on this machine
+  --version=VERSION    installed vLLM release to run (default: the one
+                       installed last)
+  --hf-token-file=PATH file holding a Hugging Face read token, for a gated or
+                       private model
+  --install-root=DIR   directory releases are installed under (default: /opt/vllm)
+  --service-user=NAME  account the server runs as (default: vllm)
+  --port=PORT          port the API listens on (default: 8000)
+  --help               show this help
+USAGE
+}
 
 fail() {
 	echo "vllm start: $*" >&2
 	exit 1
 }
+
+usage_error() {
+	echo "vllm start: $*" >&2
+	usage >&2
+	exit 2
+}
+
+model=
+requested=
+hf_token_file=
+root=/opt/vllm
+service_user=vllm
+port=8000
+for arg; do
+	case $arg in
+	--model=*) model=${arg#--model=} ;;
+	--version=*) requested=${arg#--version=} ;;
+	--hf-token-file=*) hf_token_file=${arg#--hf-token-file=} ;;
+	--install-root=*) root=${arg#--install-root=} ;;
+	--service-user=*) service_user=${arg#--service-user=} ;;
+	--port=*) port=${arg#--port=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+[ -n "$model" ] || usage_error "--model is required"
+[ -n "$root" ] || usage_error "--install-root must not be empty"
+[ -n "$service_user" ] || usage_error "--service-user must not be empty"
+
+# The port the API listens on. Its default must stay equal to the port that
+# artifact.yaml beside this script declares: nothing enforces that, and a
+# mismatch shows up only as an API that never answers where it is expected.
+#
+# A flag, never VLLM_PORT: VLLM_PORT is vLLM's own variable for the base of its
+# internal socket range, so the server is told its port with --port and nothing
+# here touches that variable. Validated because the flag can carry anything,
+# and a bad value should say so here rather than deep inside the server.
+case "$port" in
+'' | *[!0-9]*) usage_error "--port must be a port number, not '$port'" ;;
+esac
+[ "$port" -ge 1 ] && [ "$port" -le 65535 ] ||
+	usage_error "--port is out of range: $port"
 
 note() {
 	echo "vllm start: $*"
@@ -21,12 +81,10 @@ need() {
 }
 
 token_value() {
-	if [ -n "${HF_TOKEN_FILE:-}" ]; then
-		[ -r "$HF_TOKEN_FILE" ] ||
-			fail "HF_TOKEN_FILE is set but cannot be read: $HF_TOKEN_FILE"
-		tr -d '\r\n' <"$HF_TOKEN_FILE"
-	elif [ -n "${HF_TOKEN:-}" ]; then
-		printf '%s' "$HF_TOKEN"
+	if [ -n "$hf_token_file" ]; then
+		[ -r "$hf_token_file" ] ||
+			fail "--hf-token-file cannot be read: $hf_token_file"
+		tr -d '\r\n' <"$hf_token_file"
 	else
 		echo ''
 	fi
@@ -34,15 +92,12 @@ token_value() {
 
 need setpriv
 
-[ -n "${MODEL:-}" ] || fail "MODEL is required"
-
-# By APP_VERSION, the version to serve: a machine may carry two, and `current`
+# By --version, the version to serve: a machine may carry two, and `current`
 # is whichever was installed last. `current` is the fallback, so this script
-# also starts without APP_VERSION set.
-root=${VLLM_INSTALL_ROOT:-/opt/vllm}
-if [ -n "${APP_VERSION:-}" ] && [ -x "$root/$APP_VERSION/venv/bin/vllm" ]; then
-	prefix="$root/$APP_VERSION"
-	version="$APP_VERSION"
+# also starts without --version.
+if [ -n "$requested" ] && [ -x "$root/$requested/venv/bin/vllm" ]; then
+	prefix="$root/$requested"
+	version="$requested"
 else
 	prefix="$root/current"
 	version=current
@@ -68,22 +123,6 @@ fi
 [ "$gpus" -ge 1 ] ||
 	fail "no NVIDIA GPU visible on this machine; vLLM cannot serve without one"
 
-# The port the API listens on. Its default must stay equal to the port that
-# artifact.yaml beside this script declares: nothing enforces that, and a
-# mismatch shows up only as an API that never answers where it is expected.
-#
-# VLLM_SERVE_PORT and not VLLM_PORT: VLLM_PORT is vLLM's own variable for the
-# base of its internal socket range, so reusing it here would move the server
-# and walk its private ports onto the same numbers. It is validated because a
-# stray value from the surrounding environment — Kubernetes injects
-# <SERVICE>_PORT as a tcp:// URI — should say so rather than reach the server.
-port=${VLLM_SERVE_PORT:-8000}
-case "$port" in
-'' | *[!0-9]*) fail "VLLM_SERVE_PORT must be a port number, not '$port'" ;;
-esac
-[ "$port" -ge 1 ] && [ "$port" -le 65535 ] ||
-	fail "VLLM_SERVE_PORT is out of range: $port"
-
 hf_token=$(token_value)
 if [ -n "$hf_token" ]; then token_given=1; else token_given=0; fi
 
@@ -105,7 +144,7 @@ fi
 if [ -n "$hf_token" ]; then
 	# A model given as a path on the machine is already there: nothing to fetch, and
 	# no reason for the server to hold a token it will never use.
-	case "$MODEL" in
+	case "$model" in
 	/* | ./* | ../*)
 		note "the model is a path on this machine, so the Hugging Face token is not used"
 		hf_token=''
@@ -125,15 +164,15 @@ if [ -n "$hf_token" ]; then
 		;;
 	esac
 	if [ -n "$downloader" ]; then
-		note "fetching the weights for a gated model before starting model=$MODEL"
+		note "fetching the weights for a gated model before starting model=$model"
 		# Exported, never written as an argument. `env NAME=value` would put the
 		# token in the argv of env and setpriv, and /proc/<pid>/cmdline is world
 		# readable to every process on this machine.
 		export HF_TOKEN="$hf_token"
-		setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_USER" --init-groups \
+		setpriv --reuid="$service_user" --regid="$service_user" --init-groups \
 			env HOME="$prefix" HF_HOME="$HF_HOME" \
-			"$downloader" download "$MODEL" >/dev/null ||
-			fail "could not fetch $MODEL — check that the token has access to it"
+			"$downloader" download "$model" >/dev/null ||
+			fail "could not fetch $model — check that the token has access to it"
 		unset HF_TOKEN
 		hf_token=''
 	elif [ -n "$hf_token" ]; then
@@ -144,14 +183,14 @@ fi
 # Said plainly here, because otherwise the only sign is a download failing deep
 # inside the server with a permission error from the hub.
 if [ "$token_given" -eq 0 ]; then
-	case "$MODEL" in
+	case "$model" in
 	/* | ./* | ../*) : ;;
 	*) note "no Hugging Face token was given: this works for a public model and fails for a gated or private one" ;;
 	esac
 fi
 
-note "serving model=$MODEL port=$port gpus=$gpus version=$version"
-case "$MODEL" in
+note "serving model=$model port=$port gpus=$gpus version=$version"
+case "$model" in
 /* | ./* | ../*) : ;;
 *) note "the first start downloads the weights, which takes as long as the model is large" ;;
 esac
@@ -171,9 +210,9 @@ fi
 # setpriv, never su or runuser: those start a new session, which would take the
 # server out of this script's process group, so a signal sent to the group would
 # miss it.
-exec setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_USER" --init-groups \
-	env -u HF_TOKEN_FILE HOME="$prefix" HF_HOME="$HF_HOME" \
-	"$server" serve "$MODEL" \
+exec setpriv --reuid="$service_user" --regid="$service_user" --init-groups \
+	env HOME="$prefix" HF_HOME="$HF_HOME" \
+	"$server" serve "$model" \
 	--host '::' \
 	--port "$port" \
 	--tensor-parallel-size "$gpus"

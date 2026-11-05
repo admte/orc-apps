@@ -1,4 +1,4 @@
-artifactType: application/vnd.orc8r.app.v1
+artifactType: application/vnd.orc8r.app.v2
 annotations:
   org.opencontainers.image.title: vllm
   org.opencontainers.image.description: vLLM inference server, serving one model over an OpenAI-compatible API
@@ -51,19 +51,26 @@ config:
       # Every instance holds its own copy of the same model and any of them can
       # serve any request, so requests need not stick to one instance.
       serve: spread
-  # The wheel and its CUDA payload are gigabytes.
+  # The wheel and its CUDA payload are gigabytes. Each release installs into its
+  # own directory, so install, start and uninstall all name the version they act
+  # on.
   install:
     timeout: 3600s
+    command: ["./install-vllm.sh", "--version=${version}"]
+  # The token reaches the script only as the path of its file.
   start:
     service: vllm
     restart: on-failure
+    command: ["./start-vllm.sh", "--version=${version}", "--model=${model}",
+              "--hf-token-file=${hf_token_file}"]
   # No stop command: requests here are seconds long, so there is nothing to drain.
   # The signal is the default SIGTERM, which is what the server shuts down on;
   # only the grace is declared, because unloading a large model off the GPUs
   # takes longer than the default ten seconds.
   stop:
     grace: 60s
-  uninstall: {}
+  uninstall:
+    command: ["./uninstall-vllm.sh", "--version=${version}"]
 files:
   - install-vllm.sh
   - start-vllm.sh

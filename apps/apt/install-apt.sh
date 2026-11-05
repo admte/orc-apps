@@ -1,6 +1,33 @@
 #!/bin/sh
 set -eu
 
+usage() {
+	cat <<'USAGE'
+Usage: install-apt.sh [--packages=LIST]
+
+Checks that this machine is Debian or Ubuntu with apt-get, and that every name
+in LIST is a valid package name. Installs nothing.
+
+  --packages=LIST  space-separated package names, e.g. "git curl htop"
+  --help           show this help
+USAGE
+}
+
+usage_error() {
+	echo "apt install: $*" >&2
+	usage >&2
+	exit 2
+}
+
+packages_arg=
+for arg; do
+	case $arg in
+	--packages=*) packages_arg=${arg#--packages=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+
 err_unsupported() {
 	echo "apt supported only on Debian/Ubuntu with apt-get available: $*" >&2
 	exit 1
@@ -50,12 +77,12 @@ else
 	exit 1
 fi
 
-packages=$(printf '%s' "${PACKAGES:-}" | tr -d '[:space:]')
+packages=$(printf '%s' "$packages_arg" | tr -d '[:space:]')
 if [ -z "$packages" ]; then
 	exit 0
 fi
 
-for pkg in ${PACKAGES:-}; do
+for pkg in $packages_arg; do
 	if ! printf '%s\n' "$pkg" | grep -Eq '^[a-z0-9][a-z0-9+.-]*$'; then
 		echo "invalid package name \"$pkg\"" >&2
 		exit 1
