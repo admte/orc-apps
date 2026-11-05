@@ -1,6 +1,31 @@
 #!/bin/sh
 set -eu
 
+usage() {
+	cat <<'USAGE'
+Usage: install-cpp-dev-tools.sh
+
+Installs a C and C++ compiler and make from the machine's package manager
+(apt-get, dnf, yum, apk, pacman or zypper). Runs as root, or through sudo
+without a password.
+
+  --help  show this help
+USAGE
+}
+
+usage_error() {
+	echo "cpp-dev-tools install: $*" >&2
+	usage >&2
+	exit 2
+}
+
+for arg; do
+	case $arg in
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+
 err_unsupported() {
 	echo "cpp-dev-tools is not supported on this Linux distribution: $*" >&2
 	exit 1

@@ -1,17 +1,29 @@
+<#
+.SYNOPSIS
+Checks that the AWS CLI runs and, given both key files, signs in its default profile.
+
+.PARAMETER AccessKeyIdFile
+File holding the AWS access key ID.
+
+.PARAMETER SecretAccessKeyFile
+File holding the AWS secret access key.
+#>
+[CmdletBinding()]
+param(
+	[string]$AccessKeyIdFile = '',
+	[string]$SecretAccessKeyFile = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
-function Get-OrcParameter {
-	param([Parameter(Mandatory = $true)][string] $Name)
-
-	$value = [Environment]::GetEnvironmentVariable($Name)
-	$file = [Environment]::GetEnvironmentVariable("${Name}_FILE")
-	if ($file) {
-		if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
-			throw 'aws configure: credential file is not readable'
-		}
-		return ([System.IO.File]::ReadAllText($file)).TrimEnd([char[]]"`r`n")
+function Read-CredentialFile([string]$Path) {
+	if (-not $Path) {
+		return ''
 	}
-	return $value
+	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+		throw 'aws configure: credential file is not readable'
+	}
+	return ([System.IO.File]::ReadAllText($Path)).TrimEnd([char[]]"`r`n")
 }
 
 $command = Get-Command aws -ErrorAction SilentlyContinue
@@ -25,8 +37,8 @@ if (-not (Test-Path -LiteralPath $aws -PathType Leaf)) {
 }
 & $aws --version | Out-Null
 
-$accessKey = Get-OrcParameter -Name 'AWS_ACCESS_KEY_ID'
-$secretKey = Get-OrcParameter -Name 'AWS_SECRET_ACCESS_KEY'
+$accessKey = Read-CredentialFile $AccessKeyIdFile
+$secretKey = Read-CredentialFile $SecretAccessKeyFile
 if ([bool]$accessKey -ne [bool]$secretKey) {
 	throw 'aws configure: aws_access_key_id and aws_secret_access_key must be provided together'
 }

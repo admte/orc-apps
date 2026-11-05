@@ -1,15 +1,28 @@
+<#
+.SYNOPSIS
+Installs one Node.js release and puts it on the machine PATH.
+
+.PARAMETER Version
+Node.js release, e.g. 20.17.0.
+#>
+[CmdletBinding()]
+param(
+	[string]$Version = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
-if (-not $env:APP_VERSION) {
-	throw 'node install: APP_VERSION is required'
+if (-not $Version) {
+	throw 'node install: -Version is required'
 }
 if (-not $env:ProgramFiles) {
 	throw 'node install: ProgramFiles is required'
 }
 
-$version = $env:APP_VERSION.TrimStart('v')
+$requested = $Version
+$version = $requested.TrimStart('v')
 if ($version -notmatch '^\d+\.\d+\.\d+$') {
-	throw "node install: invalid APP_VERSION: $env:APP_VERSION"
+	throw "node install: invalid version: $requested"
 }
 $architecture = switch ($env:PROCESSOR_ARCHITECTURE) {
 	'AMD64' { 'x64' }

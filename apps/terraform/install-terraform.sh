@@ -1,10 +1,45 @@
 #!/bin/sh
 set -eu
 
+usage() {
+	cat <<'USAGE'
+Usage: install-terraform.sh [--version=VERSION] [--prefix=DIR] [--bin-dir=DIR]
+
+Installs one Terraform release under its own directory and points the terraform
+link at it. Without --version it installs the latest release.
+
+  --version=VERSION  Terraform release to install, e.g. 1.9.5
+  --prefix=DIR       directory each release is installed under (default: /opt/terraform)
+  --bin-dir=DIR      where the terraform link is made (default: /usr/local/bin)
+  --help             show this help
+USAGE
+}
+
 fail() {
 	echo "terraform install: $*" >&2
 	exit 1
 }
+
+usage_error() {
+	echo "terraform install: $*" >&2
+	usage >&2
+	exit 2
+}
+
+version=
+prefix=/opt/terraform
+bin_dir=/usr/local/bin
+for arg; do
+	case $arg in
+	--version=*) version=${arg#--version=} ;;
+	--prefix=*) prefix=${arg#--prefix=} ;;
+	--bin-dir=*) bin_dir=${arg#--bin-dir=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+[ -n "$prefix" ] || usage_error "--prefix must not be empty"
+[ -n "$bin_dir" ] || usage_error "--bin-dir must not be empty"
 
 need() {
 	command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
@@ -49,9 +84,8 @@ need curl
 need mktemp
 ensure_unzip
 
-version=${APP_VERSION:-${TERRAFORM_VERSION:-}}
 if [ -z "$version" ]; then
-	# No APP_VERSION was given, so ask the vendor which release is current instead
+	# No --version was given, so ask the vendor which release is current instead
 	# of guessing one.
 	release=$(curl -fsSL https://api.releases.hashicorp.com/v1/releases/terraform/latest) ||
 		fail "could not determine the latest Terraform version"
@@ -61,8 +95,6 @@ if [ -z "$version" ]; then
 fi
 version=${version#v}
 
-prefix=${TERRAFORM_PREFIX:-/opt/terraform}
-bin_dir=${TERRAFORM_BIN_DIR:-/usr/local/bin}
 install_dir="$prefix/$version"
 link="$bin_dir/terraform"
 

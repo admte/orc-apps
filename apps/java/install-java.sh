@@ -1,14 +1,49 @@
 #!/bin/sh
 set -eu
 
+usage() {
+	cat <<'USAGE'
+Usage: install-java.sh --version=VERSION [--install-root=DIR] [--bin-dir=DIR]
+
+Installs one Eclipse Temurin JDK release from Adoptium under its own directory
+and links its commands onto PATH.
+
+  --version=VERSION   JDK release to install, e.g. 21.0.4
+  --install-root=DIR  directory each release is unpacked under (default: /opt/java)
+  --bin-dir=DIR       where the JDK commands are linked (default: /usr/local/bin)
+  --help              show this help
+USAGE
+}
+
 fail() {
 	echo "java install: $*" >&2
 	exit 1
 }
 
-[ -n "${APP_VERSION:-}" ] || fail "APP_VERSION is required"
-case "$APP_VERSION" in
-'' | *[!0-9.]* | .* | *..* | *.) fail "invalid APP_VERSION: $APP_VERSION" ;;
+usage_error() {
+	echo "java install: $*" >&2
+	usage >&2
+	exit 2
+}
+
+version=
+root=/opt/java
+bin_dir=/usr/local/bin
+for arg; do
+	case $arg in
+	--version=*) version=${arg#--version=} ;;
+	--install-root=*) root=${arg#--install-root=} ;;
+	--bin-dir=*) bin_dir=${arg#--bin-dir=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+[ -n "$version" ] || usage_error "--version is required"
+[ -n "$root" ] || usage_error "--install-root must not be empty"
+[ -n "$bin_dir" ] || usage_error "--bin-dir must not be empty"
+
+case "$version" in
+'' | *[!0-9.]* | .* | *..* | *.) fail "invalid version: $version" ;;
 esac
 command -v curl >/dev/null 2>&1 || fail "curl is required"
 command -v tar >/dev/null 2>&1 || fail "tar is required"
@@ -22,13 +57,13 @@ esac
 api=https://api.adoptium.net/v3
 selector="os=linux&architecture=$arch&image_type=jdk&jvm_impl=hotspot&heap_size=normal&vendor=eclipse&project=jdk"
 
-# APP_VERSION is the release; [X,X.1) resolves its newest build for this machine.
-range="%5B$APP_VERSION,$APP_VERSION.1%29"
+# --version is the release; [X,X.1) resolves its newest build for this machine.
+range="%5B$version,$version.1%29"
 release=$(curl -fsSL \
 	"$api/info/release_names?release_type=ga&version=$range&$selector&page_size=1&sort_method=DEFAULT&sort_order=DESC" |
 	tr -d ' \t\n' |
 	sed -n 's/.*"releases":\["\([^"]*\)".*/\1/p')
-[ -n "$release" ] || fail "Adoptium publishes no $APP_VERSION release for linux/$arch"
+[ -n "$release" ] || fail "Adoptium publishes no $version release for linux/$arch"
 case "$release" in
 jdk-* | jdk8u*) ;;
 *) fail "unexpected release name from Adoptium: $release" ;;
@@ -36,9 +71,7 @@ esac
 
 binary_url="$api/binary/version/$release/linux/$arch/jdk/hotspot/normal/eclipse?project=jdk"
 checksum_url="$api/checksum/version/$release/linux/$arch/jdk/hotspot/normal/eclipse?project=jdk"
-root=${JAVA_INSTALL_ROOT:-/opt/java}
-bin_dir=${JAVA_BIN_DIR:-/usr/local/bin}
-prefix="$root/$APP_VERSION"
+prefix="$root/$version"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
@@ -79,10 +112,10 @@ jdk8u*)
 	security=${security%%-*}
 	expected_version="1.8.0_$security"
 	;;
-*) expected_version=$APP_VERSION ;;
+*) expected_version=$version ;;
 esac
 version_output=$("$prefix/bin/java" -version 2>&1)
 case "$version_output" in
 *\""$expected_version\""*) printf '%s\n' "$version_output" >&2 ;;
-*) fail "installed Java version does not match $APP_VERSION: $version_output" ;;
+*) fail "installed Java version does not match $version: $version_output" ;;
 esac

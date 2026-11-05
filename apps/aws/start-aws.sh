@@ -1,35 +1,64 @@
 #!/bin/sh
 set -eu
 
+usage() {
+	cat <<'USAGE'
+Usage: start-aws.sh [--access-key-id-file=PATH] [--secret-access-key-file=PATH]
+                    [--bin-dir=DIR]
+
+Checks that the AWS CLI runs and, given both key files, writes them to the
+default profile of the shared credentials file.
+
+  --access-key-id-file=PATH      file holding the AWS access key ID
+  --secret-access-key-file=PATH  file holding the AWS secret access key
+  --bin-dir=DIR                  where install linked the aws command
+                                 (default: /usr/local/bin)
+  --help                         show this help
+USAGE
+}
+
 fail() {
 	echo "aws configure: $*" >&2
 	exit 1
 }
 
-read_param() {
-	value=$1
-	file=$2
-	if [ -n "$file" ]; then
-		[ -r "$file" ] || fail "credential file is not readable"
-		tr -d '\r\n' <"$file"
-	else
-		printf '%s' "$value"
+usage_error() {
+	echo "aws configure: $*" >&2
+	usage >&2
+	exit 2
+}
+
+access_key_file=
+secret_key_file=
+bin_dir=/usr/local/bin
+for arg; do
+	case $arg in
+	--access-key-id-file=*) access_key_file=${arg#--access-key-id-file=} ;;
+	--secret-access-key-file=*) secret_key_file=${arg#--secret-access-key-file=} ;;
+	--bin-dir=*) bin_dir=${arg#--bin-dir=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+
+read_file() {
+	if [ -n "$1" ]; then
+		[ -r "$1" ] || fail "credential file is not readable"
+		tr -d '\r\n' <"$1"
 	fi
 }
 
 if command -v aws >/dev/null 2>&1; then
 	aws_bin=$(command -v aws)
-elif [ -n "${AWS_CLI_BIN_DIR:-}" ] && [ -x "$AWS_CLI_BIN_DIR/aws" ]; then
-	aws_bin=$AWS_CLI_BIN_DIR/aws
-elif [ -x /usr/local/bin/aws ]; then
-	aws_bin=/usr/local/bin/aws
+elif [ -x "$bin_dir/aws" ]; then
+	aws_bin=$bin_dir/aws
 else
 	fail "AWS CLI is not installed"
 fi
 "$aws_bin" --version >/dev/null
 
-access_key=$(read_param "${AWS_ACCESS_KEY_ID:-}" "${AWS_ACCESS_KEY_ID_FILE:-}")
-secret_key=$(read_param "${AWS_SECRET_ACCESS_KEY:-}" "${AWS_SECRET_ACCESS_KEY_FILE:-}")
+access_key=$(read_file "$access_key_file")
+secret_key=$(read_file "$secret_key_file")
 
 if { [ -n "$access_key" ] && [ -z "$secret_key" ]; } ||
 	{ [ -z "$access_key" ] && [ -n "$secret_key" ]; }; then

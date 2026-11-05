@@ -1,4 +1,4 @@
-artifactType: application/vnd.orc8r.app.v1
+artifactType: application/vnd.orc8r.app.v2
 annotations:
   org.opencontainers.image.title: java
   org.opencontainers.image.description: Eclipse Temurin JDK from Adoptium
@@ -14,6 +14,16 @@ config:
       pattern: '^(?P<version>\d+\.\d+\.\d+)\+.*$'
       latest_per: minor
       limit: 30
+  # Each release installs into its own directory, so install and uninstall both
+  # name the version they act on.
+  install:
+    command:
+      unix: ["./install-java.sh", "--version=${version}"]
+      windows: ["install-java.ps1", "-Version:${version}"]
+  uninstall:
+    command:
+      unix: ["./uninstall-java.sh", "--version=${version}"]
+      windows: ["uninstall-java.ps1", "-Version:${version}"]
 files:
   - install-java.sh
   - uninstall-java.sh

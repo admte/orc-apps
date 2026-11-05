@@ -1,11 +1,28 @@
+<#
+.SYNOPSIS
+Checks that Claude Code runs and, given a key file, writes the Anthropic API key into
+Claude Code's user settings.
+
+.PARAMETER ApiKeyFile
+File holding the Anthropic API key.
+
+.PARAMETER InstallDir
+Where install put claude.exe (default: .local\bin under the user profile).
+#>
+[CmdletBinding()]
+param(
+	[string]$ApiKeyFile = '',
+	[string]$InstallDir = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
 $command = Get-Command claude -ErrorAction SilentlyContinue
 if ($command) {
 	$claude = $command.Source
 } else {
-	$installDir = if ($env:CLAUDE_INSTALL_DIR) {
-		$env:CLAUDE_INSTALL_DIR
+	$installDir = if ($InstallDir) {
+		$InstallDir
 	} else {
 		Join-Path $env:USERPROFILE '.local\bin'
 	}
@@ -19,13 +36,13 @@ if ($LASTEXITCODE -ne 0) {
 	throw "claude configure: CLI version check failed with exit code $LASTEXITCODE"
 }
 
-$keyFile = $env:ANTHROPIC_API_KEY_FILE
+$keyFile = $ApiKeyFile
 if (-not $keyFile) {
 	Write-Host 'Claude Code is ready; Anthropic API key was not provided'
 	exit 0
 }
 if (-not (Test-Path -LiteralPath $keyFile -PathType Leaf)) {
-	throw 'claude configure: ANTHROPIC_API_KEY_FILE is not readable'
+	throw 'claude configure: the API key file is not readable'
 }
 $key = ([System.IO.File]::ReadAllText($keyFile)).TrimEnd([char[]]"`r`n")
 if (-not $key) {

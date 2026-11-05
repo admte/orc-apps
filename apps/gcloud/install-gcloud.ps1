@@ -1,7 +1,26 @@
+<#
+.SYNOPSIS
+Installs the latest Google Cloud CLI for the current user.
+
+.DESCRIPTION
+Leaves a gcloud command that is already on PATH as it is.
+
+.PARAMETER Force
+Install even when gcloud is already on PATH.
+
+.PARAMETER InstallDir
+Where the SDK is installed (default: Google\Cloud SDK under LOCALAPPDATA).
+#>
+[CmdletBinding()]
+param(
+	[switch]$Force,
+	[string]$InstallDir = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
 $existing = Get-Command gcloud -ErrorAction SilentlyContinue
-if ($existing -and -not $env:GCLOUD_CLI_FORCE_INSTALL) {
+if ($existing -and -not $Force) {
 	& $existing.Source version
 	if ($LASTEXITCODE -ne 0) {
 		throw "gcloud install: existing CLI failed with exit code $LASTEXITCODE"
@@ -12,8 +31,8 @@ if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
 	throw "gcloud install: unsupported architecture $env:PROCESSOR_ARCHITECTURE"
 }
 
-$installRoot = if ($env:GCLOUD_INSTALL_DIR) {
-	$env:GCLOUD_INSTALL_DIR
+$installRoot = if ($InstallDir) {
+	$InstallDir
 } else {
 	Join-Path $env:LOCALAPPDATA 'Google\Cloud SDK'
 }

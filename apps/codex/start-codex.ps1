@@ -1,11 +1,28 @@
+<#
+.SYNOPSIS
+Checks that the Codex CLI runs and, given a key file, signs it in with the OpenAI API
+key.
+
+.PARAMETER ApiKeyFile
+File holding the OpenAI API key.
+
+.PARAMETER InstallDir
+Where install put the codex launcher (default: .local\bin under the user profile).
+#>
+[CmdletBinding()]
+param(
+	[string]$ApiKeyFile = '',
+	[string]$InstallDir = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
 $command = Get-Command codex -ErrorAction SilentlyContinue
 if ($command) {
 	$codex = $command.Source
 } else {
-	$installDir = if ($env:CODEX_INSTALL_DIR) {
-		$env:CODEX_INSTALL_DIR
+	$installDir = if ($InstallDir) {
+		$InstallDir
 	} else {
 		Join-Path $env:USERPROFILE '.local\bin'
 	}
@@ -22,13 +39,13 @@ if ($LASTEXITCODE -ne 0) {
 	throw "codex configure: CLI version check failed with exit code $LASTEXITCODE"
 }
 
-$keyFile = $env:OPENAI_API_KEY_FILE
+$keyFile = $ApiKeyFile
 if (-not $keyFile) {
 	Write-Host 'Codex CLI is ready; OpenAI API key was not provided'
 	exit 0
 }
 if (-not (Test-Path -LiteralPath $keyFile -PathType Leaf)) {
-	throw 'codex configure: OPENAI_API_KEY_FILE is not readable'
+	throw 'codex configure: the API key file is not readable'
 }
 $key = ([System.IO.File]::ReadAllText($keyFile)).TrimEnd([char[]]"`r`n")
 if (-not $key) {

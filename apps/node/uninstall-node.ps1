@@ -1,12 +1,25 @@
+<#
+.SYNOPSIS
+Removes one Node.js release that install-node.ps1 installed.
+
+.PARAMETER Version
+Node.js release, e.g. 20.17.0.
+#>
+[CmdletBinding()]
+param(
+	[string]$Version = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
-if (-not $env:APP_VERSION) {
-	throw 'node uninstall: APP_VERSION is required'
+if (-not $Version) {
+	throw 'node uninstall: -Version is required'
 }
 
-$version = $env:APP_VERSION.TrimStart('v')
+$requested = $Version
+$version = $requested.TrimStart('v')
 if ($version -notmatch '^\d+\.\d+\.\d+$') {
-	throw "node uninstall: invalid APP_VERSION: $env:APP_VERSION"
+	throw "node uninstall: invalid version: $requested"
 }
 $root = Join-Path $env:ProgramFiles 'node'
 $prefix = Join-Path $root $version

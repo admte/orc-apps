@@ -1,7 +1,23 @@
+<#
+.SYNOPSIS
+Checks that the Cursor CLI runs and, given a key file, that the API key authenticates.
+
+.PARAMETER ApiKeyFile
+File holding the Cursor API key.
+
+.PARAMETER AgentBin
+The agent command to check (default: agent on PATH).
+#>
+[CmdletBinding()]
+param(
+	[string]$ApiKeyFile = '',
+	[string]$AgentBin = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
-if ($env:CURSOR_AGENT_BIN -and (Test-Path -LiteralPath $env:CURSOR_AGENT_BIN -PathType Leaf)) {
-	$agent = $env:CURSOR_AGENT_BIN
+if ($AgentBin -and (Test-Path -LiteralPath $AgentBin -PathType Leaf)) {
+	$agent = $AgentBin
 } else {
 	$command = Get-Command agent -ErrorAction SilentlyContinue
 	if ($command) {
@@ -27,13 +43,13 @@ if ($LASTEXITCODE -ne 0) {
 # The CLI is an interactive TUI, not a service: launching it headless exits
 # immediately, so start only verifies the install and, when a key is
 # provided, that the key authenticates.
-$keyFile = $env:CURSOR_API_KEY_FILE
+$keyFile = $ApiKeyFile
 if (-not $keyFile) {
 	Write-Host 'Cursor CLI is ready; API key was not provided'
 	exit 0
 }
 if (-not (Test-Path -LiteralPath $keyFile -PathType Leaf)) {
-	throw 'cursor start: CURSOR_API_KEY_FILE is not readable'
+	throw 'cursor start: the API key file is not readable'
 }
 $env:CURSOR_API_KEY = ([System.IO.File]::ReadAllText($keyFile)).TrimEnd([char[]]"`r`n")
 if (-not $env:CURSOR_API_KEY) {

@@ -1,12 +1,47 @@
 #!/bin/sh
 set -eu
 
+usage() {
+	cat <<'USAGE'
+Usage: install-node.sh --version=VERSION [--install-root=DIR] [--bin-dir=DIR]
+
+Installs one Node.js release under its own directory and links node, npm, npx
+and corepack onto PATH.
+
+  --version=VERSION   Node.js release to install, e.g. 20.17.0
+  --install-root=DIR  directory each release is unpacked under (default: /opt/node)
+  --bin-dir=DIR       where the commands are linked (default: /usr/local/bin)
+  --help              show this help
+USAGE
+}
+
 fail() {
 	echo "node install: $*" >&2
 	exit 1
 }
 
-[ -n "${APP_VERSION:-}" ] || fail "APP_VERSION is required"
+usage_error() {
+	echo "node install: $*" >&2
+	usage >&2
+	exit 2
+}
+
+requested=
+root=/opt/node
+bin_dir=/usr/local/bin
+for arg; do
+	case $arg in
+	--version=*) requested=${arg#--version=} ;;
+	--install-root=*) root=${arg#--install-root=} ;;
+	--bin-dir=*) bin_dir=${arg#--bin-dir=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+[ -n "$requested" ] || usage_error "--version is required"
+[ -n "$root" ] || usage_error "--install-root must not be empty"
+[ -n "$bin_dir" ] || usage_error "--bin-dir must not be empty"
+
 command -v curl >/dev/null 2>&1 || fail "curl is required"
 command -v tar >/dev/null 2>&1 || fail "tar is required"
 
@@ -16,14 +51,12 @@ aarch64 | arm64) arch=arm64 ;;
 *) fail "unsupported architecture: $(uname -m)" ;;
 esac
 
-version=${APP_VERSION#v}
+version=${requested#v}
 case "$version" in
-'' | *[!0-9.]* | .* | *..* | *.) fail "invalid APP_VERSION: $APP_VERSION" ;;
+'' | *[!0-9.]* | .* | *..* | *.) fail "invalid version: $requested" ;;
 esac
 asset="node-v$version-linux-$arch.tar.xz"
 base="https://nodejs.org/dist/v$version"
-root=${NODE_INSTALL_ROOT:-/opt/node}
-bin_dir=${NODE_BIN_DIR:-/usr/local/bin}
 prefix="$root/$version"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM

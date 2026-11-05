@@ -1,18 +1,52 @@
 #!/bin/sh
 set -eu
 
+usage() {
+	cat <<'USAGE'
+Usage: install-codex.sh [--version=VERSION] [--force] [--install-dir=DIR]
+
+Installs the OpenAI Codex CLI. Without --version it installs the latest
+release, and leaves a codex command that is already on PATH as it is.
+
+  --version=VERSION  Codex CLI release to install, e.g. 0.50.0 or rust-v0.50.0
+  --force            install even when codex is already on PATH
+  --install-dir=DIR  where the codex command is installed (default: /usr/local/bin)
+  --help             show this help
+USAGE
+}
+
 fail() {
 	echo "codex install: $*" >&2
 	exit 1
 }
+
+usage_error() {
+	echo "codex install: $*" >&2
+	usage >&2
+	exit 2
+}
+
+requested=
+force=
+install_dir=/usr/local/bin
+for arg; do
+	case $arg in
+	--version=*) requested=${arg#--version=} ;;
+	--force) force=1 ;;
+	--install-dir=*) install_dir=${arg#--install-dir=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+[ -n "$install_dir" ] || usage_error "--install-dir must not be empty"
 
 need() {
 	command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
 }
 
 if command -v codex >/dev/null 2>&1 &&
-	[ -z "${APP_VERSION:-}" ] &&
-	[ -z "${CODEX_FORCE_INSTALL:-}" ]; then
+	[ -z "$requested" ] &&
+	[ -z "$force" ]; then
 	codex --version
 	exit 0
 fi
@@ -31,8 +65,8 @@ esac
 need curl
 need tar
 archive="codex-package-$arch-$platform.tar.gz"
-if [ -n "${APP_VERSION:-}" ]; then
-	version=${APP_VERSION#rust-v}
+if [ -n "$requested" ]; then
+	version=${requested#rust-v}
 	version=${version#v}
 	base_url="https://github.com/openai/codex/releases/download/rust-v$version"
 else
@@ -59,7 +93,6 @@ fi
 tar -xzf "$tmp/$archive" -C "$tmp"
 [ -x "$tmp/bin/codex" ] || fail "Codex CLI binary is missing from $archive"
 
-install_dir=${CODEX_INSTALL_DIR:-/usr/local/bin}
 package_dir="$install_dir/.codex-package"
 mkdir -p "$install_dir"
 rm -rf "$package_dir"

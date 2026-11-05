@@ -1,10 +1,23 @@
+<#
+.SYNOPSIS
+Installs one Eclipse Temurin JDK release from Adoptium, puts it on the machine PATH and
+sets JAVA_HOME.
+
+.PARAMETER Version
+JDK release, e.g. 21.0.4.
+#>
+[CmdletBinding()]
+param(
+	[string]$Version = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
-if (-not $env:APP_VERSION) {
-	throw 'java install: APP_VERSION is required'
+if (-not $Version) {
+	throw 'java install: -Version is required'
 }
-if ($env:APP_VERSION -notmatch '^\d+\.\d+\.\d+$') {
-	throw "java install: invalid APP_VERSION: $env:APP_VERSION"
+if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+	throw "java install: invalid version: $Version"
 }
 if (-not $env:ProgramFiles) {
 	throw 'java install: ProgramFiles is required'
@@ -20,21 +33,21 @@ $api = 'https://api.adoptium.net/v3'
 $selector = "os=windows&architecture=$architecture&image_type=jdk&jvm_impl=hotspot" +
 	'&heap_size=normal&vendor=eclipse&project=jdk'
 
-# APP_VERSION is the release; [X,X.1) resolves its newest build for this machine.
-$range = [uri]::EscapeDataString("[$($env:APP_VERSION),$($env:APP_VERSION).1)")
+# -Version is the release; [X,X.1) resolves its newest build for this machine.
+$range = [uri]::EscapeDataString("[$Version,$Version.1)")
 $names = Invoke-RestMethod -UseBasicParsing -Uri (
 	"$api/info/release_names?release_type=ga&version=$range&$selector" +
 	'&page_size=1&sort_method=DEFAULT&sort_order=DESC'
 )
 $release = @($names.releases) | Select-Object -First 1
 if (-not $release) {
-	throw "java install: Adoptium publishes no $env:APP_VERSION release for windows/$architecture"
+	throw "java install: Adoptium publishes no $Version release for windows/$architecture"
 }
 if ($release -match '^jdk8u(\d+)-b\d+$') {
 	# Java 8 reports 1.8.0_<security>.
 	$expectedVersion = "1.8.0_$($Matches[1])"
 } elseif ($release -match '^jdk-\d+(\.\d+)*\+') {
-	$expectedVersion = $env:APP_VERSION
+	$expectedVersion = $Version
 } else {
 	throw "java install: unexpected release name from Adoptium: $release"
 }
@@ -42,7 +55,7 @@ if ($release -match '^jdk8u(\d+)-b\d+$') {
 $binaryUrl = "$api/binary/version/$release/windows/$architecture/jdk/hotspot/normal/eclipse?project=jdk"
 $checksumUrl = "$api/checksum/version/$release/windows/$architecture/jdk/hotspot/normal/eclipse?project=jdk"
 $root = Join-Path $env:ProgramFiles 'java'
-$prefix = Join-Path $root $env:APP_VERSION
+$prefix = Join-Path $root $Version
 $current = Join-Path $root 'current'
 $pathEntry = Join-Path $current 'bin'
 $work = Join-Path ([System.IO.Path]::GetTempPath()) "java-$([guid]::NewGuid())"
@@ -106,7 +119,7 @@ try {
 	}
 	if ($versionExitCode -ne 0 -or
 		$versionOutput -notmatch "`"$([regex]::Escape($expectedVersion))`"") {
-		throw "java install: installed version does not match $env:APP_VERSION`: $versionOutput"
+		throw "java install: installed version does not match $Version`: $versionOutput"
 	}
 	Write-Host $versionOutput.Trim()
 } finally {

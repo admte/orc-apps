@@ -1,7 +1,31 @@
+<#
+.SYNOPSIS
+Installs the OpenAI Codex CLI.
+
+.DESCRIPTION
+Without -Version it installs the latest release, and leaves a codex command that is
+already on PATH as it is.
+
+.PARAMETER Version
+Codex CLI release to install, e.g. 0.50.0 or rust-v0.50.0.
+
+.PARAMETER Force
+Install even when codex is already on PATH.
+
+.PARAMETER InstallDir
+Where the codex launcher is installed (default: .local\bin under the user profile).
+#>
+[CmdletBinding()]
+param(
+	[string]$Version = '',
+	[switch]$Force,
+	[string]$InstallDir = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
 $existing = Get-Command codex -ErrorAction SilentlyContinue
-if ($existing -and -not $env:APP_VERSION -and -not $env:CODEX_FORCE_INSTALL) {
+if ($existing -and -not $Version -and -not $Force) {
 	& $existing.Source --version
 	if ($LASTEXITCODE -ne 0) {
 		throw "codex install: existing CLI failed with exit code $LASTEXITCODE"
@@ -15,14 +39,14 @@ $architecture = switch ($env:PROCESSOR_ARCHITECTURE) {
 	default { throw "codex install: unsupported architecture $env:PROCESSOR_ARCHITECTURE" }
 }
 $archive = "codex-package-$architecture-pc-windows-msvc.tar.gz"
-$baseUrl = if ($env:APP_VERSION) {
-	$version = $env:APP_VERSION -replace '^rust-v', '' -replace '^v', ''
-	"https://github.com/openai/codex/releases/download/rust-v$version"
+$baseUrl = if ($Version) {
+	$release = $Version -replace '^rust-v', '' -replace '^v', ''
+	"https://github.com/openai/codex/releases/download/rust-v$release"
 } else {
 	'https://github.com/openai/codex/releases/latest/download'
 }
-$installDir = if ($env:CODEX_INSTALL_DIR) {
-	$env:CODEX_INSTALL_DIR
+$installDir = if ($InstallDir) {
+	$InstallDir
 } else {
 	Join-Path $env:USERPROFILE '.local\bin'
 }

@@ -1,10 +1,49 @@
 #!/bin/sh
 set -eu
 
+usage() {
+	cat <<'USAGE'
+Usage: install-aws.sh [--version=VERSION] [--force] [--install-dir=DIR]
+                      [--bin-dir=DIR]
+
+Installs the AWS CLI v2. Without --version it installs the latest release, and
+leaves an aws command that is already on PATH as it is.
+
+  --version=VERSION  AWS CLI release to install, e.g. 2.17.0
+  --force            install even when aws is already on PATH
+  --install-dir=DIR  where the CLI is unpacked on Linux (default: /usr/local/aws-cli)
+  --bin-dir=DIR      where the aws command is linked on Linux (default: /usr/local/bin)
+  --help             show this help
+USAGE
+}
+
 fail() {
 	echo "aws install: $*" >&2
 	exit 1
 }
+
+usage_error() {
+	echo "aws install: $*" >&2
+	usage >&2
+	exit 2
+}
+
+version=
+force=
+install_dir=/usr/local/aws-cli
+bin_dir=/usr/local/bin
+for arg; do
+	case $arg in
+	--version=*) version=${arg#--version=} ;;
+	--force) force=1 ;;
+	--install-dir=*) install_dir=${arg#--install-dir=} ;;
+	--bin-dir=*) bin_dir=${arg#--bin-dir=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+[ -n "$install_dir" ] || usage_error "--install-dir must not be empty"
+[ -n "$bin_dir" ] || usage_error "--bin-dir must not be empty"
 
 need() {
 	command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
@@ -34,7 +73,7 @@ ensure_unzip() {
 	command -v unzip >/dev/null 2>&1 || fail "unzip installation failed"
 }
 
-if command -v aws >/dev/null 2>&1 && [ -z "${APP_VERSION:-}" ] && [ -z "${AWS_CLI_FORCE_INSTALL:-}" ]; then
+if command -v aws >/dev/null 2>&1 && [ -z "$version" ] && [ -z "$force" ]; then
 	aws --version
 	exit 0
 fi
@@ -52,8 +91,8 @@ Linux)
 	*) fail "unsupported architecture: $(uname -m)" ;;
 	esac
 
-	if [ -n "${APP_VERSION:-}" ]; then
-		zip="awscli-exe-linux-$arch-$APP_VERSION.zip"
+	if [ -n "$version" ]; then
+		zip="awscli-exe-linux-$arch-$version.zip"
 	else
 		zip="awscli-exe-linux-$arch.zip"
 	fi
@@ -62,8 +101,6 @@ Linux)
 		-o "$tmp/awscliv2.zip"
 	unzip -q "$tmp/awscliv2.zip" -d "$tmp"
 
-	install_dir=${AWS_CLI_INSTALL_DIR:-/usr/local/aws-cli}
-	bin_dir=${AWS_CLI_BIN_DIR:-/usr/local/bin}
 	set -- --install-dir "$install_dir" --bin-dir "$bin_dir"
 	if [ -d "$install_dir" ]; then
 		set -- "$@" --update
@@ -73,8 +110,8 @@ Linux)
 	;;
 Darwin)
 	[ "$(id -u)" -eq 0 ] || fail "macOS installation requires root privileges"
-	if [ -n "${APP_VERSION:-}" ]; then
-		pkg="AWSCLIV2-$APP_VERSION.pkg"
+	if [ -n "$version" ]; then
+		pkg="AWSCLIV2-$version.pkg"
 	else
 		pkg="AWSCLIV2.pkg"
 	fi

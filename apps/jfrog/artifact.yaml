@@ -1,4 +1,4 @@
-artifactType: application/vnd.orc8r.app.v1
+artifactType: application/vnd.orc8r.app.v2
 annotations:
   org.opencontainers.image.title: jfrog
   # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
@@ -31,10 +31,19 @@ config:
       prerelease: false
       pattern: "^2\\.[0-9.]+$"
       limit: 30
+  # Without a version (the `default` tag) install takes the latest release.
   install:
-    command: "{installCommand}"
+    command:
+      unix: ["./install-jfrog.sh", "--version=${version}"]
+      windows: ["install-jfrog.ps1", "-Version:${version}"]
+  # Configures the server when the URL, user and token are given; the token
+  # reaches the script only as the path of its file.
   start:
-    command: "{startCommand}"
+    command:
+      unix: ["./start-jfrog.sh", "--url=${jfrog_url}", "--user=${jfrog_user}",
+             "--token-file=${jfrog_token_file}"]
+      windows: ["start-jfrog.ps1", "-Url:${jfrog_url}", "-User:${jfrog_user}",
+                "-TokenFile:${jfrog_token_file}"]
 files:
   - install-jfrog.sh
   - start-jfrog.sh
@@ -43,20 +52,11 @@ files:
 platforms:
   - os: linux
     arch: amd64
-    vars: &unix
-      installCommand: sh install-jfrog.sh
-      startCommand: sh start-jfrog.sh
   - os: linux
     arch: arm64
-    vars: *unix
   - os: darwin
     arch: amd64
-    vars: *unix
   - os: darwin
     arch: arm64
-    vars: *unix
   - os: windows
     arch: amd64
-    vars:
-      installCommand: powershell -NoProfile -ExecutionPolicy Bypass -File install-jfrog.ps1
-      startCommand: powershell -NoProfile -ExecutionPolicy Bypass -File start-jfrog.ps1
