@@ -1,6 +1,27 @@
+<#
+.SYNOPSIS
+Installs the HashiCorp Vault CLI for the current user.
+
+.DESCRIPTION
+Without -Version it installs the latest release, and leaves a vault command that is
+already on PATH as it is.
+
+.PARAMETER Version
+Vault release to install, e.g. 1.17.2.
+
+.PARAMETER InstallDir
+Where vault.exe is installed and added to the user PATH; defaults to
+%LOCALAPPDATA%\Programs\Vault.
+#>
+[CmdletBinding()]
+param(
+    [string]$Version = '',
+    [string]$InstallDir = ''
+)
+
 $ErrorActionPreference = "Stop"
 
-if (-not $env:APP_VERSION -and -not $env:VAULT_VERSION -and (Get-Command vault -ErrorAction SilentlyContinue)) {
+if (-not $Version -and (Get-Command vault -ErrorAction SilentlyContinue)) {
     vault version
     exit 0
 }
@@ -10,23 +31,20 @@ $architecture = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSA
     default { throw "vault install: unsupported architecture: $_" }
 }
 
-$version = if ($env:APP_VERSION) { $env:APP_VERSION } else { $env:VAULT_VERSION }
-if (-not $version) {
+if (-not $Version) {
     $release = Invoke-RestMethod -Uri "https://api.releases.hashicorp.com/v1/releases/vault/latest"
-    $version = $release.version
+    $Version = $release.version
 }
-if (-not $version) {
+if (-not $Version) {
     throw "vault install: could not determine the latest Vault version"
 }
-$version = $version.TrimStart("v")
+$Version = $Version.TrimStart("v")
 
-$archive = "vault_${version}_windows_${architecture}.zip"
-$baseUrl = "https://releases.hashicorp.com/vault/$version"
+$archive = "vault_${Version}_windows_${architecture}.zip"
+$baseUrl = "https://releases.hashicorp.com/vault/$Version"
 $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "vault-$([guid]::NewGuid())"
-$installDir = if ($env:VAULT_INSTALL_DIR) {
-    $env:VAULT_INSTALL_DIR
-} else {
-    Join-Path $env:LOCALAPPDATA "Programs\Vault"
+if (-not $InstallDir) {
+    $InstallDir = Join-Path $env:LOCALAPPDATA "Programs\Vault"
 }
 
 try {
@@ -34,9 +52,9 @@ try {
     $archivePath = Join-Path $tempDir $archive
     $checksumsPath = Join-Path $tempDir "SHA256SUMS"
 
-    Write-Host "Downloading Vault $version for windows/$architecture"
+    Write-Host "Downloading Vault $Version for windows/$architecture"
     Invoke-WebRequest -Uri "$baseUrl/$archive" -OutFile $archivePath
-    Invoke-WebRequest -Uri "$baseUrl/vault_${version}_SHA256SUMS" -OutFile $checksumsPath
+    Invoke-WebRequest -Uri "$baseUrl/vault_${Version}_SHA256SUMS" -OutFile $checksumsPath
 
     $checksumLine = Get-Content $checksumsPath |
         Where-Object { $_ -match "^[0-9a-fA-F]{64}\s+\*?$([regex]::Escape($archive))$" } |
@@ -53,17 +71,17 @@ try {
 
     $unpacked = Join-Path $tempDir "unpacked"
     Expand-Archive -Path $archivePath -DestinationPath $unpacked
-    New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-    Copy-Item -Path (Join-Path $unpacked "vault.exe") -Destination $installDir -Force
+    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+    Copy-Item -Path (Join-Path $unpacked "vault.exe") -Destination $InstallDir -Force
 
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
     $pathEntries = @($userPath -split ";" | Where-Object { $_ })
-    if ($installDir -notin $pathEntries) {
-        $newPath = (@($pathEntries) + $installDir) -join ";"
+    if ($InstallDir -notin $pathEntries) {
+        $newPath = (@($pathEntries) + $InstallDir) -join ";"
         [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
     }
 
-    & (Join-Path $installDir "vault.exe") version
+    & (Join-Path $InstallDir "vault.exe") version
 } finally {
     if (Test-Path $tempDir) {
         Remove-Item -Path $tempDir -Recurse -Force

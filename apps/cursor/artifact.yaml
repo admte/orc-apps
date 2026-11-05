@@ -1,4 +1,4 @@
-artifactType: application/vnd.orc8r.app.v1
+artifactType: application/vnd.orc8r.app.v2
 annotations:
   org.opencontainers.image.title: cursor
   # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
@@ -15,9 +15,15 @@ config:
         sensitive: true
         lifetime: startup
   install:
-    command: "{installCommand}"
+    command:
+      unix: ["./install-cursor.sh"]
+      windows: ["install-cursor.ps1"]
+  # Checks the CLI and, when an API key is given, that it authenticates; the key
+  # reaches the script only as the path of its file.
   start:
-    command: "{startCommand}"
+    command:
+      unix: ["./start-cursor.sh", "--api-key-file=${cursor_api_key_file}"]
+      windows: ["start-cursor.ps1", "-ApiKeyFile:${cursor_api_key_file}"]
 files:
   - install-cursor.sh
   - start-cursor.sh
@@ -26,23 +32,13 @@ files:
 platforms:
   - os: linux
     arch: amd64
-    vars: &unix
-      installCommand: sh install-cursor.sh
-      startCommand: sh start-cursor.sh
   - os: linux
     arch: arm64
-    vars: *unix
   - os: darwin
     arch: amd64
-    vars: *unix
   - os: darwin
     arch: arm64
-    vars: *unix
   - os: windows
     arch: amd64
-    vars: &windows
-      installCommand: powershell -NoProfile -ExecutionPolicy Bypass -File install-cursor.ps1
-      startCommand: powershell -NoProfile -ExecutionPolicy Bypass -File start-cursor.ps1
   - os: windows
     arch: arm64
-    vars: *windows

@@ -1,11 +1,28 @@
+<#
+.SYNOPSIS
+Checks that the Google Cloud CLI runs and, given a service account key file, activates
+that service account.
+
+.PARAMETER ServiceAccountKeyFile
+File holding a service account JSON key.
+
+.PARAMETER InstallDir
+Where install put the SDK (default: Google\Cloud SDK under LOCALAPPDATA).
+#>
+[CmdletBinding()]
+param(
+	[string]$ServiceAccountKeyFile = '',
+	[string]$InstallDir = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
 $command = Get-Command gcloud -ErrorAction SilentlyContinue
 if ($command) {
 	$gcloud = $command.Source
 } else {
-	$installRoot = if ($env:GCLOUD_INSTALL_DIR) {
-		$env:GCLOUD_INSTALL_DIR
+	$installRoot = if ($InstallDir) {
+		$InstallDir
 	} else {
 		Join-Path $env:LOCALAPPDATA 'Google\Cloud SDK'
 	}
@@ -26,13 +43,13 @@ if ($LASTEXITCODE -ne 0) {
 	throw "gcloud configure: CLI version check failed with exit code $LASTEXITCODE"
 }
 
-$keyFile = $env:SERVICE_ACCOUNT_KEY_FILE
+$keyFile = $ServiceAccountKeyFile
 if (-not $keyFile) {
 	Write-Host 'Google Cloud CLI is ready; service account key was not provided'
 	exit 0
 }
 if (-not (Test-Path -LiteralPath $keyFile -PathType Leaf)) {
-	throw 'gcloud configure: SERVICE_ACCOUNT_KEY_FILE is not readable'
+	throw 'gcloud configure: the service account key file is not readable'
 }
 
 Write-Host 'Activating Google Cloud service account'

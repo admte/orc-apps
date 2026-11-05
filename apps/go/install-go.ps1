@@ -1,15 +1,28 @@
+<#
+.SYNOPSIS
+Installs one Go release and puts it on the machine PATH.
+
+.PARAMETER Version
+Go release, e.g. 1.22.5.
+#>
+[CmdletBinding()]
+param(
+	[string]$Version = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
-if (-not $env:APP_VERSION) {
-	throw 'go install: APP_VERSION is required'
+if (-not $Version) {
+	throw 'go install: -Version is required'
 }
 if (-not $env:ProgramFiles) {
 	throw 'go install: ProgramFiles is required'
 }
 
-$version = $env:APP_VERSION -replace '^go', ''
+$requested = $Version
+$version = $requested -replace '^go', ''
 if ($version -notmatch '^\d+\.\d+(\.\d+)?$') {
-	throw "go install: invalid APP_VERSION: $env:APP_VERSION"
+	throw "go install: invalid version: $requested"
 }
 $architecture = switch ($env:PROCESSOR_ARCHITECTURE) {
 	'AMD64' { 'amd64' }

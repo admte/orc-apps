@@ -1,14 +1,26 @@
+<#
+.SYNOPSIS
+Removes one JDK release that install-java.ps1 installed.
+
+.PARAMETER Version
+JDK release, e.g. 21.0.4.
+#>
+[CmdletBinding()]
+param(
+	[string]$Version = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
-if (-not $env:APP_VERSION) {
-	throw 'java uninstall: APP_VERSION is required'
+if (-not $Version) {
+	throw 'java uninstall: -Version is required'
 }
-if ($env:APP_VERSION -notmatch '^\d+\.\d+\.\d+$') {
-	throw "java uninstall: invalid APP_VERSION: $env:APP_VERSION"
+if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+	throw "java uninstall: invalid version: $Version"
 }
 
 $root = Join-Path $env:ProgramFiles 'java'
-$prefix = Join-Path $root $env:APP_VERSION
+$prefix = Join-Path $root $Version
 $current = Join-Path $root 'current'
 $pathEntry = Join-Path $current 'bin'
 

@@ -1,10 +1,41 @@
 #!/bin/sh
 set -eu
 
+usage() {
+	cat <<'USAGE'
+Usage: install-vault-unix.sh [--version=VERSION] [--install-dir=DIR]
+
+Installs the HashiCorp Vault CLI. Without --version it installs the latest
+release, and leaves a vault command that is already on PATH as it is.
+
+  --version=VERSION  Vault release to install, e.g. 1.17.2
+  --install-dir=DIR  where the vault command is installed (default: /usr/local/bin)
+  --help             show this help
+USAGE
+}
+
 fail() {
 	echo "vault install: $*" >&2
 	exit 1
 }
+
+usage_error() {
+	echo "vault install: $*" >&2
+	usage >&2
+	exit 2
+}
+
+version=
+install_dir=/usr/local/bin
+for arg; do
+	case $arg in
+	--version=*) version=${arg#--version=} ;;
+	--install-dir=*) install_dir=${arg#--install-dir=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+[ -n "$install_dir" ] || usage_error "--install-dir must not be empty"
 
 need() {
 	command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
@@ -50,12 +81,11 @@ need curl
 need mktemp
 ensure_unzip
 
-if [ -z "${APP_VERSION:-}" ] && [ -z "${VAULT_VERSION:-}" ] && command -v vault >/dev/null 2>&1; then
+if [ -z "$version" ] && command -v vault >/dev/null 2>&1; then
 	vault version
 	exit 0
 fi
 
-version=${APP_VERSION:-${VAULT_VERSION:-}}
 if [ -z "$version" ]; then
 	release=$(curl -fsSL https://api.releases.hashicorp.com/v1/releases/vault/latest) ||
 		fail "could not determine the latest Vault version"
@@ -89,7 +119,6 @@ fi
 unzip -q "$tmp_dir/$archive" -d "$tmp_dir/unpacked"
 [ -f "$tmp_dir/unpacked/vault" ] || fail "Vault binary is missing from $archive"
 
-install_dir=${VAULT_INSTALL_DIR:-/usr/local/bin}
 mkdir -p "$install_dir"
 install -m 0755 "$tmp_dir/unpacked/vault" "$install_dir/vault"
 

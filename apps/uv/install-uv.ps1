@@ -1,20 +1,37 @@
+<#
+.SYNOPSIS
+Installs uv and uvx for the current user.
+
+.DESCRIPTION
+With -Version it installs that release into %USERPROFILE%\.local\bin and adds it to the
+user PATH. Without it, it runs Astral's installer for the latest release, and leaves a uv
+that is already on PATH as it is.
+
+.PARAMETER Version
+uv release to install, e.g. 0.4.20.
+#>
+[CmdletBinding()]
+param(
+	[string]$Version = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
-if (-not $env:APP_VERSION -and (Get-Command uv -ErrorAction SilentlyContinue)) {
+if (-not $Version -and (Get-Command uv -ErrorAction SilentlyContinue)) {
 	uv --version
 	exit 0
 }
 
-if ($env:APP_VERSION) {
+if ($Version) {
 	$archive = 'uv-x86_64-pc-windows-msvc.zip'
-	$url = "https://github.com/astral-sh/uv/releases/download/$($env:APP_VERSION)/$archive"
+	$url = "https://github.com/astral-sh/uv/releases/download/$Version/$archive"
 	$installDir = Join-Path $env:USERPROFILE '.local\bin'
 	$tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "uv-$([guid]::NewGuid())"
 	try {
 		New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 		$archivePath = Join-Path $tempDir $archive
 
-		Write-Host "Downloading uv $($env:APP_VERSION) for windows/amd64"
+		Write-Host "Downloading uv $Version for windows/amd64"
 		Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $archivePath
 
 		$unpacked = Join-Path $tempDir 'unpacked'

@@ -1,3 +1,27 @@
+<#
+.SYNOPSIS
+Installs Claude Code.
+
+.DESCRIPTION
+Without -Version it installs the latest release, and leaves a claude command that is
+already on PATH as it is.
+
+.PARAMETER Version
+Claude Code release to install, e.g. 2.1.0.
+
+.PARAMETER Force
+Install even when claude is already on PATH.
+
+.PARAMETER InstallDir
+Where claude.exe is installed (default: .local\bin under the user profile).
+#>
+[CmdletBinding()]
+param(
+	[string]$Version = '',
+	[switch]$Force,
+	[string]$InstallDir = ''
+)
+
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
@@ -38,7 +62,7 @@ function Save-ClaudeDownload {
 }
 
 $existing = Get-Command claude -ErrorAction SilentlyContinue
-if ($existing -and -not $env:APP_VERSION -and -not $env:CLAUDE_CODE_FORCE_INSTALL) {
+if ($existing -and -not $Version -and -not $Force) {
 	& $existing.Source --version
 	if ($LASTEXITCODE -ne 0) {
 		throw "claude install: existing CLI failed with exit code $LASTEXITCODE"
@@ -52,14 +76,13 @@ $architecture = switch ($env:PROCESSOR_ARCHITECTURE) {
 	default { throw "claude install: unsupported architecture $env:PROCESSOR_ARCHITECTURE" }
 }
 $archive = "claude-win32-$architecture.zip"
-$baseUrl = if ($env:APP_VERSION) {
-	$version = $env:APP_VERSION.TrimStart('v')
-	"https://github.com/anthropics/claude-code/releases/download/v$version"
+$baseUrl = if ($Version) {
+	"https://github.com/anthropics/claude-code/releases/download/v$($Version.TrimStart('v'))"
 } else {
 	'https://github.com/anthropics/claude-code/releases/latest/download'
 }
-$installDir = if ($env:CLAUDE_INSTALL_DIR) {
-	$env:CLAUDE_INSTALL_DIR
+$installDir = if ($InstallDir) {
+	$InstallDir
 } else {
 	Join-Path $env:USERPROFILE '.local\bin'
 }
