@@ -1,6 +1,26 @@
 #!/bin/sh
 set -eu
 
+# Takes positional arguments, not flags: install copies this script to a fixed
+# path and start runs that copy, so its argument list stays as it is.
+if [ "${1:-}" = --help ]; then
+	cat <<'USAGE'
+Usage: run-jenkins-agent.sh URL USERNAME PASSWORD_FILE AGENT_NAME LABELS
+                            AGENT_DIR LOG_CONFIG [CA_BUNDLE]
+
+Puts a Java matching the Jenkins controller's and the controller's own Swarm
+client in AGENT_DIR, then becomes the Swarm client, connected to the controller
+at URL as USERNAME with the password in PASSWORD_FILE.
+
+  AGENT_NAME  agent name; empty means this machine's host name
+  LABELS      space-separated labels for the agent; may be empty
+  LOG_CONFIG  java.util.logging config file for the client
+  CA_BUNDLE   extra CA certificates (PEM) to verify the controller with,
+              trusted alongside the system CAs; a missing file means none
+USAGE
+	exit 0
+fi
+
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=jenkins-agent-common.sh
 . "$SCRIPT_DIR/jenkins-agent-common.sh"

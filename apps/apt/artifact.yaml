@@ -1,4 +1,4 @@
-artifactType: application/vnd.orc8r.app.v1
+artifactType: application/vnd.orc8r.app.v2
 annotations:
   org.opencontainers.image.title: apt
   # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
@@ -11,10 +11,11 @@ config:
       packages:
         type: string
         description: Space-separated package names (e.g. git curl htop)
+  # Install checks the machine and the package names; start installs them.
   install:
-    command: sh install-apt.sh
+    command: ["./install-apt.sh", "--packages=${packages}"]
   start:
-    command: sh start-apt.sh
+    command: ["./start-apt.sh", "--packages=${packages}"]
 files:
   - install-apt.sh
   - start-apt.sh

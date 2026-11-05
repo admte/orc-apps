@@ -1,10 +1,33 @@
 #!/bin/sh
 set -eu
 
+usage() {
+	cat <<'USAGE'
+Usage: install-docker.sh
+
+Installs the Docker engine from Docker's own repository for this distribution,
+then enables and starts its service. Does nothing when docker is already
+installed. Run as root.
+
+  --help  show this help
+USAGE
+}
+
 fail() {
 	echo "docker install: $*" >&2
 	exit 1
 }
+
+for arg; do
+	case $arg in
+	--help) usage; exit 0 ;;
+	*)
+		echo "docker install: unknown argument $arg" >&2
+		usage >&2
+		exit 2
+		;;
+	esac
+done
 
 # Already installed: nothing to do, so running this again changes nothing.
 if command -v docker >/dev/null 2>&1; then

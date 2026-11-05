@@ -26,10 +26,38 @@ fail() {
 	exit 1
 }
 
+usage() {
+	cat <<'USAGE'
+Usage: install-nvidia-driver.sh [--state-dir=DIR]
+
+Installs the NVIDIA driver Ubuntu recommends for the GPUs it finds, from
+Ubuntu's signed packages, and loads it, rebooting once when it cannot load in
+place. Run again after the reboot to confirm the driver loaded. Run as root.
+
+  --state-dir=DIR  where the pending-reboot marker is kept
+                   (default: /var/lib/nvidia-driver-app)
+  --help           show this help
+USAGE
+}
+
+usage_error() {
+	echo "nvidia-driver install: $*" >&2
+	usage >&2
+	exit 2
+}
+
 # Remembers the boot that asked for a reboot, so the pass after it can tell
 # "installed, reboot pending" from "rebooted and still not loaded". Overridable
 # only so a test can point it somewhere writable.
-state_dir=${NVIDIA_DRIVER_STATE_DIR:-/var/lib/nvidia-driver-app}
+state_dir=/var/lib/nvidia-driver-app
+for arg; do
+	case $arg in
+	--state-dir=*) state_dir=${arg#--state-dir=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+[ -n "$state_dir" ] || usage_error "--state-dir must not be empty"
 reboot_marker="$state_dir/reboot-requested"
 
 # NVIDIA display and 3D controllers on the PCI bus, read from sysfs so the

@@ -1,4 +1,4 @@
-artifactType: application/vnd.orc8r.app.v1
+artifactType: application/vnd.orc8r.app.v2
 annotations:
   org.opencontainers.image.title: jenkins-agent
   # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
@@ -31,23 +31,30 @@ config:
           kind: pool.name
       # Extra CA certificates, so both halves of the agent can verify a controller
       # served with a privately issued certificate: the HTTP calls and the JVM the
-      # Swarm client runs in. Delivered as a file (`TLS_CA_FILE`) because of
-      # contentMediaType. Optional, and trusted alongside the system CAs rather
-      # than instead of them, so a publicly trusted controller, or a plain
-      # http:// one, keeps working with or without it.
+      # Swarm client runs in. A file because of contentMediaType, so it reaches a
+      # phase only as ${tls_ca_file}, a path. Optional, and trusted alongside the
+      # system CAs rather than instead of them, so a publicly trusted controller,
+      # or a plain http:// one, keeps working with or without it.
       tls_ca:
         type: string
         title: TLS CA bundle
         contentMediaType: application/x-pem-file
         x-source:
           kind: ca.bundle
-  install: {}
+  # Lays out the agent directory, the password file the Swarm client re-reads on
+  # every restart, and a copy of the runner at a fixed path. The password reaches
+  # it only as ${jenkins_password_file}, a path.
+  install:
+    command:
+      unix: ["./install-jenkins-agent.sh", "--url=${jenkins_url}",
+             "--username=${jenkins_username}", "--password-file=${jenkins_password_file}"]
+      windows: ["install-jenkins-agent.ps1", "-Url:${jenkins_url}",
+                "-Username:${jenkins_username}", "-PasswordFile:${jenkins_password_file}"]
   # Managed service: the service definition is generated from this block, so the
   # package ships no unit file, registers nothing with the SCM, and never enables
-  # anything for boot. No `command` here — the packaged
-  # start-jenkins-agent.{sh,ps1} resolves per platform, and a start command that
-  # resolves (from config or from a packaged script) plus a `service` name is what
-  # selects managed service mode.
+  # anything for boot. The start command plus the `service` name is what makes it
+  # a managed service: the script runs in the foreground as the service's main
+  # process.
   #
   # On Linux the start script drops to the jenkins account with setpriv (never su or
   # runuser), inside the same session, so the Swarm client stays the service's own
@@ -57,11 +64,25 @@ config:
   start:
     service: jenkins-agent
     restart: always
+    command:
+      unix: ["./start-jenkins-agent.sh", "--url=${jenkins_url}",
+             "--username=${jenkins_username}", "--labels=${labels}",
+             "--tls-ca-file=${tls_ca_file}"]
+      windows: ["start-jenkins-agent.ps1", "-Url:${jenkins_url}",
+                "-Username:${jenkins_username}", "-Labels:${labels}",
+                "-TlsCaFile:${tls_ca_file}"]
   # stop-jenkins-agent.{sh,ps1} marks the agent offline and waits for its build; the
   # timeout is a long build, the grace is the JVM's own shutdown.
   stop:
     timeout: 30m
     grace: 30s
+    command:
+      unix: ["./stop-jenkins-agent.sh", "--url=${jenkins_url}",
+             "--username=${jenkins_username}", "--tls-ca-file=${tls_ca_file}",
+             "--stop-reason=${stop_reason}"]
+      windows: ["stop-jenkins-agent.ps1", "-Url:${jenkins_url}",
+                "-Username:${jenkins_username}", "-TlsCaFile:${tls_ca_file}",
+                "-StopReason:${stop_reason}"]
 files:
   - install-jenkins-agent.sh
   - start-jenkins-agent.sh
