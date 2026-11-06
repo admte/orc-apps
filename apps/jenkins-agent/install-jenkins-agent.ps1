@@ -8,14 +8,8 @@ Writes the password the Swarm client re-reads on every start into the agent dire
 readable only by LocalSystem, the local Administrators and the installing account, and
 copies the runner to a fixed path.
 
-.PARAMETER Url
-Jenkins controller URL.
-
-.PARAMETER Username
-Jenkins user the agent connects as.
-
 .PARAMETER PasswordFile
-File holding that user's API token or password.
+File holding the Jenkins user's API token or password.
 
 .PARAMETER AgentDir
 The agent's own directory. Default: C:\ProgramData\jenkins-agent.
@@ -25,8 +19,6 @@ Where the runner is copied. Default: the bin directory under -AgentDir.
 #>
 [CmdletBinding()]
 param(
-	[string]$Url = '',
-	[string]$Username = '',
 	[string]$PasswordFile = '',
 	[string]$AgentDir = 'C:\ProgramData\jenkins-agent',
 	[string]$RunnerDir = ''
@@ -47,8 +39,6 @@ $ErrorActionPreference = 'Stop'
 # `jenkins` account to drop to — and the service that runs it is defined outside
 # this package.
 
-if (-not $Url) { throw 'jenkins-agent install: -Url is required' }
-if (-not $Username) { throw 'jenkins-agent install: -Username is required' }
 if (-not $PasswordFile) { throw 'jenkins-agent install: -PasswordFile is required' }
 
 if (-not $RunnerDir) { $RunnerDir = Join-Path $AgentDir 'bin' }
@@ -74,7 +64,9 @@ function Write-TextFile($path, $text) {
 # next start, while the Swarm client re-reads its password on every service
 # restart. Only the accounts that can run the service may read it, so inheritance is
 # dropped and the access rules are rebuilt from well-known SIDs (LocalSystem, the
-# local Administrators group) plus whoever is installing.
+# local Administrators group) plus whoever is installing. The file is created empty and
+# protected before the password is written into it, so the password never sits in a file
+# that still carries the access rules inherited from the agent directory.
 function Protect-PasswordFile($path) {
 	$acl = Get-Acl -LiteralPath $path
 	$acl.SetAccessRuleProtection($true, $false)
@@ -116,8 +108,9 @@ java.util.logging.SimpleFormatter.format = %4$s %2$s %5$s%6$s%n
 Write-TextFile $logConfigPath ($loggingConfig + "`n")
 
 Write-Host "jenkins-agent install: writing the password file path=$storedPasswordFile"
-Write-TextFile $storedPasswordFile $jenkinsPassword
+Write-TextFile $storedPasswordFile ''
 Protect-PasswordFile $storedPasswordFile
+Write-TextFile $storedPasswordFile $jenkinsPassword
 $jenkinsPassword = $null
 
 # The runner lives at a fixed path so a service that runs start-jenkins-agent.ps1

@@ -7,9 +7,11 @@ set -eu
 # stopping the service comes after, and is never this script's job.
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=jenkins-agent-common.sh
+. "$SCRIPT_DIR/jenkins-agent-common.sh"
 
 usage() {
-	cat <<'USAGE'
+	cat <<USAGE
 Usage: stop-jenkins-agent.sh --url=URL --username=NAME [--tls-ca-file=PATH]
                              [--stop-reason=REASON] [--agent-dir=DIR]
                              [--idle-timeout=SECONDS] [--poll-interval=SECONDS]
@@ -24,7 +26,8 @@ to the caller.
                            controller with; without it, the copy start staged
   --stop-reason=REASON     why the agent is stopping, shown as its offline
                            message (default: stop)
-  --agent-dir=DIR          the agent's own directory (default: /var/lib/jenkins-agent)
+  --agent-dir=DIR          the agent's own directory
+                           (default: $JENKINS_AGENT_DIR_DEFAULT)
   --idle-timeout=SECONDS   how long to wait for the build (default: 1740)
   --poll-interval=SECONDS  how often to ask whether it is idle (default: 10)
   --help                   show this help
@@ -46,7 +49,7 @@ jenkins_url=
 jenkins_username=
 tls_ca_file=
 stop_reason=
-agent_dir=/var/lib/jenkins-agent
+agent_dir=$JENKINS_AGENT_DIR_DEFAULT
 # Just under half an hour, so a stop that is given half an hour ends with a message
 # of its own rather than being cut off mid-poll.
 idle_timeout=1740
@@ -78,9 +81,6 @@ PASSWORD_FILE="$agent_dir/jenkins.password"
 # The copy start-jenkins-agent.sh staged for the running agent; the fallback when
 # no --tls-ca-file is given to this stop.
 STAGED_CA_PATH="$agent_dir/platform-ca.pem"
-
-# shellcheck source=jenkins-agent-common.sh
-. "$SCRIPT_DIR/jenkins-agent-common.sh"
 
 note() {
 	echo "jenkins-agent stop: $*" >&2

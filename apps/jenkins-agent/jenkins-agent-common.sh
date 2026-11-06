@@ -1,7 +1,16 @@
 #!/bin/sh
-# Shared Jenkins REST helpers for the jenkins-agent app.
+# Shared defaults and Jenkins REST helpers for the jenkins-agent app.
 #
-# Sourced, never executed. A session holds the basic-auth credentials, a cookie
+# Sourced, never executed: install, start and stop source the copy beside them, and
+# the runner the copy install put beside it.
+#
+# The defaults are kept here and nowhere else, so every script agrees on where the
+# agent lives, the account it runs as, and where install puts the runner.
+JENKINS_AGENT_DIR_DEFAULT=/var/lib/jenkins-agent
+JENKINS_SERVICE_USER_DEFAULT=jenkins
+JENKINS_RUNNER_DIR_DEFAULT=/etc/jenkins-agent
+
+# A session holds the basic-auth credentials, a cookie
 # jar, and the CSRF crumb the controller hands out; every request in one script's
 # run reuses them, because Jenkins binds the crumb to the session that fetched it.
 #

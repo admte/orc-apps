@@ -10,8 +10,12 @@ set -eu
 # Every step execs: this script becomes setpriv, which becomes the runner, which
 # becomes the JVM, so the service's main pid is the JVM itself.
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=jenkins-agent-common.sh
+. "$SCRIPT_DIR/jenkins-agent-common.sh"
+
 usage() {
-	cat <<'USAGE'
+	cat <<USAGE
 Usage: start-jenkins-agent.sh --url=URL --username=NAME [--labels=LIST]
                               [--tls-ca-file=PATH] [--agent-dir=DIR]
                               [--service-user=NAME] [--runner-dir=DIR]
@@ -24,9 +28,11 @@ after this machine. Run as root, after install.
   --labels=LIST        space-separated labels for the agent
   --tls-ca-file=PATH   file holding extra CA certificates (PEM) to verify the
                        controller with, trusted alongside the system CAs
-  --agent-dir=DIR      the agent's own directory (default: /var/lib/jenkins-agent)
-  --service-user=NAME  account the agent runs as (default: jenkins)
-  --runner-dir=DIR     where install copied the runner (default: /etc/jenkins-agent)
+  --agent-dir=DIR      the agent's own directory
+                       (default: $JENKINS_AGENT_DIR_DEFAULT)
+  --service-user=NAME  account the agent runs as (default: $JENKINS_SERVICE_USER_DEFAULT)
+  --runner-dir=DIR     where install copied the runner
+                       (default: $JENKINS_RUNNER_DIR_DEFAULT)
   --help               show this help
 USAGE
 }
@@ -46,9 +52,9 @@ jenkins_url=
 jenkins_username=
 labels=
 tls_ca_file=
-agent_dir=/var/lib/jenkins-agent
-service_user=jenkins
-runner_dir=/etc/jenkins-agent
+agent_dir=$JENKINS_AGENT_DIR_DEFAULT
+service_user=$JENKINS_SERVICE_USER_DEFAULT
+runner_dir=$JENKINS_RUNNER_DIR_DEFAULT
 for arg; do
 	case $arg in
 	--url=*) jenkins_url=${arg#--url=} ;;

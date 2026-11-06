@@ -2,23 +2,24 @@
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=jenkins-agent-common.sh
+. "$SCRIPT_DIR/jenkins-agent-common.sh"
 
 usage() {
-	cat <<'USAGE'
-Usage: install-jenkins-agent.sh --url=URL --username=NAME --password-file=PATH
-                                [--agent-dir=DIR] [--service-user=NAME]
-                                [--runner-dir=DIR]
+	cat <<USAGE
+Usage: install-jenkins-agent.sh --password-file=PATH [--agent-dir=DIR]
+                                [--service-user=NAME] [--runner-dir=DIR]
 
 Lays out the Jenkins agent's directory, its logging config and a copy of the
 password it reads on every start, creates the account it runs as, and copies
 the runner to a fixed path. Run as root.
 
-  --url=URL            Jenkins controller URL
-  --username=NAME      Jenkins user the agent connects as
-  --password-file=PATH file holding that user's API token or password
-  --agent-dir=DIR      the agent's own directory (default: /var/lib/jenkins-agent)
-  --service-user=NAME  account the agent runs as (default: jenkins)
-  --runner-dir=DIR     where the runner is copied (default: /etc/jenkins-agent)
+  --password-file=PATH file holding the Jenkins user's API token or password
+  --agent-dir=DIR      the agent's own directory
+                       (default: $JENKINS_AGENT_DIR_DEFAULT)
+  --service-user=NAME  account the agent runs as (default: $JENKINS_SERVICE_USER_DEFAULT)
+  --runner-dir=DIR     where the runner is copied
+                       (default: $JENKINS_RUNNER_DIR_DEFAULT)
   --help               show this help
 USAGE
 }
@@ -34,16 +35,12 @@ usage_error() {
 	exit 2
 }
 
-jenkins_url=
-jenkins_username=
 password_file=
-agent_dir=/var/lib/jenkins-agent
-service_user=jenkins
-runner_dir=/etc/jenkins-agent
+agent_dir=$JENKINS_AGENT_DIR_DEFAULT
+service_user=$JENKINS_SERVICE_USER_DEFAULT
+runner_dir=$JENKINS_RUNNER_DIR_DEFAULT
 for arg; do
 	case $arg in
-	--url=*) jenkins_url=${arg#--url=} ;;
-	--username=*) jenkins_username=${arg#--username=} ;;
 	--password-file=*) password_file=${arg#--password-file=} ;;
 	--agent-dir=*) agent_dir=${arg#--agent-dir=} ;;
 	--service-user=*) service_user=${arg#--service-user=} ;;
@@ -52,8 +49,6 @@ for arg; do
 	*) usage_error "unknown argument $arg" ;;
 	esac
 done
-[ -n "$jenkins_url" ] || usage_error "--url is required"
-[ -n "$jenkins_username" ] || usage_error "--username is required"
 [ -n "$password_file" ] || usage_error "--password-file is required"
 [ -n "$agent_dir" ] || usage_error "--agent-dir must not be empty"
 [ -n "$service_user" ] || usage_error "--service-user must not be empty"
@@ -95,9 +90,14 @@ EOF
 
 # The password is copied into the agent directory: the --password-file given here
 # may be gone by the next start, while the Swarm client re-reads its password on
-# every service restart.
+# every service restart. Created under umask 077, so it is never readable by others,
+# not even for the moment before the chmod; the chmod covers a file an earlier
+# install left with wider permissions.
 write_password_file() {
-	printf '%s' "$jenkins_password" >"$PASSWORD_FILE"
+	(
+		umask 077
+		printf '%s' "$jenkins_password" >"$PASSWORD_FILE"
+	)
 	chmod 0600 "$PASSWORD_FILE"
 }
 
