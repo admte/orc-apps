@@ -43,13 +43,12 @@ config:
           kind: ca.bundle
   # Lays out the agent directory, the password file the Swarm client re-reads on
   # every restart, and a copy of the runner at a fixed path. The password reaches
-  # it only as ${jenkins_password_file}, a path.
+  # it only as ${jenkins_password_file}, a path; the URL and username are start's
+  # and stop's, so install does not take them.
   install:
     command:
-      unix: ["./install-jenkins-agent.sh", "--url=${jenkins_url}",
-             "--username=${jenkins_username}", "--password-file=${jenkins_password_file}"]
-      windows: ["install-jenkins-agent.ps1", "-Url:${jenkins_url}",
-                "-Username:${jenkins_username}", "-PasswordFile:${jenkins_password_file}"]
+      unix: ["./install-jenkins-agent.sh", "--password-file=${jenkins_password_file}"]
+      windows: ["install-jenkins-agent.ps1", "-PasswordFile:${jenkins_password_file}"]
   # Managed service: the service definition is generated from this block, so the
   # package ships no unit file, registers nothing with the SCM, and never enables
   # anything for boot. The start command plus the `service` name is what makes it
