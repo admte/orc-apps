@@ -39,8 +39,8 @@ config:
     api:
       port: 8000
       protocol: http
-      # start-vllm.sh defaults to this number; the two have to be changed
-      # together, because nothing checks that they agree.
+      # The start command below passes this same number as --port: the two
+      # lines are the one place the port is set, and change together.
       probe:
         # vLLM's own deployment guide probes this path. Until the model is
         # loaded there is no listener at all, so the probe fails on the dial —
@@ -57,12 +57,13 @@ config:
   install:
     timeout: 3600s
     command: ["./install-vllm.sh", "--version=${version}"]
-  # The token reaches the script only as the path of its file.
+  # The token reaches the script only as the path of its file; --port is the
+  # endpoint's port above.
   start:
     service: vllm
     restart: on-failure
     command: ["./start-vllm.sh", "--version=${version}", "--model=${model}",
-              "--hf-token-file=${hf_token_file}"]
+              "--hf-token-file=${hf_token_file}", "--port=8000"]
   # No stop command: requests here are seconds long, so there is nothing to drain.
   # The signal is the default SIGTERM, which is what the server shuts down on;
   # only the grace is declared, because unloading a large model off the GPUs

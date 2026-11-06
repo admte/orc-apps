@@ -58,9 +58,8 @@ done
 [ -n "$root" ] || usage_error "--install-root must not be empty"
 [ -n "$service_user" ] || usage_error "--service-user must not be empty"
 
-# The port the API listens on. Its default must stay equal to the port that
-# artifact.yaml beside this script declares: nothing enforces that, and a
-# mismatch shows up only as an API that never answers where it is expected.
+# The port the API listens on. artifact.yaml beside this script always passes
+# it, next to the endpoint port it declares; the default is for a run by hand.
 #
 # A flag, never VLLM_PORT: VLLM_PORT is vLLM's own variable for the base of its
 # internal socket range, so the server is told its port with --port and nothing
