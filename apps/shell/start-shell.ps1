@@ -49,14 +49,16 @@ if (-not $command.Trim()) {
 }
 
 # cmd.exe runs a file as a batch only when its name ends in .cmd or .bat, so the commands are
-# copied into one, in a directory of this script's own that is removed afterwards. Batch lines end
-# in CRLF; `@echo off` keeps cmd.exe from echoing each command before it runs.
-$work = Join-Path ([IO.Path]::GetTempPath()) ('shell-' + [guid]::NewGuid().ToString('N'))
-$batch = Join-Path $work 'command.cmd'
+# copied into one, uniquely named, beside the command file: that directory is the caller's to
+# clean, so a run killed before its own cleanup leaves nothing behind in a shared place. Batch
+# lines end in CRLF. `@echo off` keeps cmd.exe from echoing each command before it runs, and
+# `chcp 65001` switches it to UTF-8, the encoding the file is written in, so non-ASCII text in
+# the commands runs as written.
+$batch = [IO.Path]::Combine([IO.Path]::GetDirectoryName($CmdFile),
+	'shell-' + [guid]::NewGuid().ToString('N') + '.cmd')
 $exitCode = 1
 try {
-	New-Item -ItemType Directory -Path $work | Out-Null
-	$text = "@echo off`r`n" + ($command -replace "`r?`n", "`r`n")
+	$text = "@echo off`r`nchcp 65001 >nul`r`n" + ($command -replace "`r?`n", "`r`n")
 	[IO.File]::WriteAllText($batch, $text, (New-Object Text.UTF8Encoding $false))
 
 	$start = New-Object System.Diagnostics.ProcessStartInfo
@@ -69,6 +71,6 @@ try {
 	$process.WaitForExit()
 	$exitCode = $process.ExitCode
 } finally {
-	Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+	Remove-Item -LiteralPath $batch -Force -ErrorAction SilentlyContinue
 }
 exit $exitCode
