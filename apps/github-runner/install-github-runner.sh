@@ -47,11 +47,8 @@ need() {
 	command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
 }
 
-# Installs a tool the image left out: minimal EL 9 and 10 cloud images ship
-# without tar.
-ensure_tool() {
-	command -v "$1" >/dev/null 2>&1 && return 0
-	echo "github-runner install: installing $1" >&2
+# Installs one package with the machine's package manager.
+install_package() {
 	if command -v apt-get >/dev/null 2>&1; then
 		DEBIAN_FRONTEND=noninteractive apt-get update -qq
 		DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$1"
@@ -64,7 +61,19 @@ ensure_tool() {
 	else
 		fail "$1 is required and no supported package manager was found"
 	fi
+}
+
+# Installs a tool the image left out: minimal EL 9 and 10 cloud images ship
+# without tar.
+ensure_tool() {
+	command -v "$1" >/dev/null 2>&1 && return 0
+	echo "github-runner install: installing $1" >&2
+	install_package "$1"
 	need "$1"
+}
+
+has_libicu() {
+	ldconfig -p | grep -q 'libicuuc\.so'
 }
 
 # The Actions runner refuses to configure or run as root ("Must not run with
@@ -187,7 +196,15 @@ if [ "$runner_os" = linux ]; then
 		[ "${lib##*/}" = libcoreclrtraceptprovider.so ] || ldd "$lib" 2>/dev/null
 	done | awk '/not found/ { print $1 }' | sort -u | tr '\n' ' ')
 	[ -z "$missing" ] || fail "the runner's libraries are missing: $missing"
-	ldconfig -p | grep -q 'libicuuc\.so' || fail "the runner needs libicu, which is not installed"
+	# On EL 10 the installer asks for lttng-ust, which lives in the CRB
+	# repository, and where CRB is disabled its single transaction installs
+	# nothing, libicu included. libicu itself is in BaseOS, so it is installed on
+	# its own rather than by enabling a repository on this machine.
+	if ! has_libicu && { command -v dnf || command -v yum; } >/dev/null 2>&1; then
+		echo "github-runner install: installing libicu" >&2
+		install_package libicu
+	fi
+	has_libicu || fail "the runner needs libicu, which is not installed"
 	ldconfig -p | grep -q 'libssl\.so' || fail "the runner needs OpenSSL, which is not installed"
 fi
 chown -R "$service_user:$service_user" "$work_dir"
