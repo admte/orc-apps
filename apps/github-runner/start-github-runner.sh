@@ -76,8 +76,14 @@ done
 [ -n "$service_user" ] || usage_error "--service-user must not be empty"
 parse_labels "$labels_arg"
 
+# Progress goes to stdout and only warnings and errors to stderr, so a healthy
+# start writes nothing there.
 note() {
-	echo "github-runner start: $*" >&2
+	echo "github-runner start: $*"
+}
+
+warn() {
+	echo "github-runner start: warning: $*" >&2
 }
 
 need() {
@@ -356,7 +362,7 @@ elif [ -z "$labels" ]; then
 	note "no labels to ensure name=$runner_name"
 else
 	(ensure_labels) ||
-		note "could not ensure the labels; starting without them name=$runner_name labels=$labels"
+		warn "could not ensure the labels; starting without them name=$runner_name labels=$labels"
 fi
 
 note "starting the listener name=$runner_name dir=$work_dir"

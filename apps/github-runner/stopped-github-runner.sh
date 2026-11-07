@@ -67,8 +67,10 @@ case $retry_interval in
 '' | *[!0-9]*) usage_error "--retry-interval must be a whole number of seconds" ;;
 esac
 
+# Progress goes to stdout and only warnings and errors to stderr, so a healthy
+# stopped writes nothing there.
 note() {
-	echo "github-runner stopped: $*" >&2
+	echo "github-runner stopped: $*"
 }
 
 need() {

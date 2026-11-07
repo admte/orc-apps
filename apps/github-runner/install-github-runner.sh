@@ -43,6 +43,16 @@ for arg; do
 	esac
 done
 
+# Progress goes to stdout and only warnings and errors to stderr, so a healthy
+# install writes nothing there.
+note() {
+	echo "github-runner install: $*"
+}
+
+warn() {
+	echo "github-runner install: warning: $*" >&2
+}
+
 need() {
 	command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
 }
@@ -67,7 +77,7 @@ install_package() {
 # without tar.
 ensure_tool() {
 	command -v "$1" >/dev/null 2>&1 && return 0
-	echo "github-runner install: installing $1" >&2
+	note "installing $1"
 	install_package "$1"
 	need "$1"
 }
@@ -167,16 +177,16 @@ checksum=$(printf '%s\n' "$selected" | sed -n 3p)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-echo "github-runner install: downloading the runner archive=$archive" >&2
+note "downloading the runner archive=$archive"
 curl -fsSL "$url" -o "$tmp/$archive"
 if [ -n "$checksum" ]; then
 	need sha256sum
 	actual=$(sha256sum "$tmp/$archive" | awk '{ print $1 }')
 	[ "$actual" = "$checksum" ] ||
 		fail "checksum mismatch archive=$archive expected=$checksum actual=$actual"
-	echo "github-runner install: checksum verified archive=$archive" >&2
+	note "checksum verified archive=$archive"
 else
-	echo "github-runner install: no published checksum; skipping verification archive=$archive" >&2
+	warn "no published checksum; skipping verification archive=$archive"
 fi
 tar -xzf "$tmp/$archive" -C "$work_dir"
 
@@ -187,9 +197,9 @@ tar -xzf "$tmp/$archive" -C "$work_dir"
 # The installer is all or nothing, though, so it may fail over a package the
 # runner can do without; what decides is whether the libraries are there after.
 if [ "$runner_os" = linux ]; then
-	echo "github-runner install: installing the runner's dependencies" >&2
+	note "installing the runner's dependencies"
 	DEBIAN_FRONTEND=noninteractive "$work_dir/bin/installdependencies.sh" ||
-		echo "github-runner install: the runner's dependency installer failed; checking its libraries" >&2
+		warn "the runner's dependency installer failed; checking its libraries"
 	# The trace provider's lttng is optional, and .NET opens ICU and OpenSSL at
 	# run time, so ldd cannot see those two.
 	missing=$(for lib in "$work_dir"/bin/*.so; do
@@ -201,7 +211,7 @@ if [ "$runner_os" = linux ]; then
 	# nothing, libicu included. libicu itself is in BaseOS, so it is installed on
 	# its own rather than by enabling a repository on this machine.
 	if ! has_libicu && { command -v dnf || command -v yum; } >/dev/null 2>&1; then
-		echo "github-runner install: installing libicu" >&2
+		note "installing libicu"
 		install_package libicu
 	fi
 	has_libicu || fail "the runner needs libicu, which is not installed"
@@ -213,4 +223,4 @@ chown -R "$service_user:$service_user" "$work_dir"
 # to other machines, and `config.sh` writes `.runner` and `.credentials` — the
 # runner's own auth material — that every copy would then share. Registration is
 # start-github-runner.sh's, once per machine.
-echo "github-runner install: complete dir=$work_dir user=$service_user" >&2
+note "complete dir=$work_dir user=$service_user"

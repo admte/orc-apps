@@ -269,7 +269,9 @@ if ($minted) {
 			-Body $body -Uri "https://api.github.com/$labelApiPath/actions/runners/$runnerId/labels" | Out-Null
 		Write-Host "github-runner start: labels ensured name=$runnerName id=$runnerId labels=$runnerLabels"
 	} catch {
-		Write-Host "github-runner start: could not ensure the labels; starting without them name=$runnerName labels=$runnerLabels error=$($_.Exception.Message)"
+		# A warning, so stderr: progress goes to stdout, and only warnings and errors
+		# to stderr.
+		[Console]::Error.WriteLine("github-runner start: warning: could not ensure the labels; starting without them name=$runnerName labels=$runnerLabels error=$($_.Exception.Message)")
 	}
 }
 
