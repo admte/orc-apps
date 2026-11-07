@@ -85,8 +85,14 @@ case $poll_interval in
 esac
 parse_labels "$labels_arg"
 
+# Progress goes to stdout and only warnings and errors to stderr, so a healthy
+# stop writes nothing there.
 note() {
-	echo "github-runner stop: $*" >&2
+	echo "github-runner stop: $*"
+}
+
+warn() {
+	echo "github-runner stop: warning: $*" >&2
 }
 
 need() {
@@ -127,44 +133,24 @@ github_api_path() {
 	fi
 }
 
-github_get() {
-	curl -fsSL \
-		-H "Accept: application/vnd.github+json" \
-		-H "Authorization: token $github_token" \
-		"https://api.github.com/$1"
-}
-
-# Prints the numeric id of the runner registered under $1, or nothing.
-runner_id_on_page() {
+# Prints the id and the name this directory's runner registered under, one per
+# line, from `.runner`: the record config.sh writes when it registers, with a
+# UTF-8 BOM. Prints nothing when the record is missing or unreadable, so the
+# runner is found by its own registration, never by a name guessed here.
+registration_record() {
 	python3 -c '
 import json, sys
-name = sys.argv[1]
-for runner in json.load(sys.stdin).get("runners", []):
-    if runner.get("name") == name:
-        print(runner.get("id", ""))
-        break
-' "$1"
-}
-
-runner_page_count() {
-	python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("runners", [])))'
-}
-
-# The API pages at 100; an org can register far more runners than that, so walk
-# pages until one comes back short or the name is found.
-find_runner_id() {
-	page=1
-	while [ "$page" -le 20 ]; do
-		body=$(github_get "$api_path/actions/runners?per_page=100&page=$page") || return 1
-		id=$(printf '%s' "$body" | runner_id_on_page "$runner_name")
-		if [ -n "$id" ]; then
-			printf '%s' "$id"
-			return 0
-		fi
-		[ "$(printf '%s' "$body" | runner_page_count)" -eq 100 ] || return 0
-		page=$((page + 1))
-	done
-	return 0
+try:
+    with open(sys.argv[1], encoding="utf-8-sig") as f:
+        record = json.load(f)
+    runner_id = record.get("agentId")
+    name = record.get("agentName") or ""
+except Exception:
+    sys.exit(0)
+if isinstance(runner_id, int) and not isinstance(runner_id, bool) and runner_id > 0:
+    print(runner_id)
+    print(name)
+' "$1" 2>/dev/null || true
 }
 
 # A label goes into the request path, so it is percent-encoded there: a slash, a
@@ -184,7 +170,7 @@ remove_labels() {
 			-H "Accept: application/vnd.github+json" \
 			-H "Authorization: token $github_token" \
 			"https://api.github.com/$api_path/actions/runners/$runner_id/labels/$(url_path_segment "$label")" ||
-			note "label removal failed; continuing to wait for the current job name=$runner_name label=$label"
+			warn "label removal failed; continuing to wait for the current job name=$runner_name label=$label"
 	done
 }
 
@@ -195,7 +181,6 @@ worker_running() {
 }
 
 need curl
-need hostname
 need pgrep
 need python3
 
@@ -206,31 +191,35 @@ if [ ! -x "$work_dir/config.sh" ]; then
 fi
 work_dir=$(CDPATH= cd -- "$work_dir" && pwd)
 
-runner_name=$(hostname)
+record=$(registration_record "$work_dir/.runner")
+runner_id=$(printf '%s\n' "$record" | sed -n 1p)
+runner_name=$(printf '%s\n' "$record" | sed -n 2p)
+if [ -n "$runner_id" ]; then
+	note "found the runner in its registration record name=$runner_name id=$runner_id file=$work_dir/.runner"
+fi
 # Absent is not fatal: without a credential there are no labels to take off, and
 # the wait for the current job below still holds.
 credential=$(token_value 2>/dev/null) || credential=
 
 # A JSON registration holds no API credential and set its labels when it
 # registered, so there are no labels to take off: stopping the listener once the
-# job below has finished is what keeps it from taking another.
+# job below has finished is what keeps it from taking another. A directory with
+# no readable `.runner` was never registered, or no longer is, so there is no
+# runner whose labels could be taken off.
 if [ -z "$credential" ]; then
 	note "no credential available; skipping the label step name=$runner_name"
 elif is_minted "$credential"; then
 	note "JSON registration; no labels to remove, relying on the stop signal name=$runner_name"
 elif [ -z "$labels" ]; then
 	note "no labels to remove; relying on the stop signal name=$runner_name"
+elif [ -z "$runner_id" ]; then
+	note "no registration record; no runner to unlabel file=$work_dir/.runner"
 else
 	[ -n "$repo_url" ] || fail "--url is required"
 	github_token=$credential
 	api_path=$(github_api_path)
-	runner_id=$(find_runner_id) || fail "failed to list runners name=$runner_name"
-	if [ -z "$runner_id" ]; then
-		note "runner is not registered; nothing to unlabel name=$runner_name"
-	else
-		note "removing the labels so no new job is routed here name=$runner_name id=$runner_id labels=$labels"
-		remove_labels
-	fi
+	note "removing the labels so no new job is routed here name=$runner_name id=$runner_id labels=$labels"
+	remove_labels
 fi
 
 if ! worker_running; then

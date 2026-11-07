@@ -104,17 +104,31 @@ function Get-GitHubApiPath {
 	return "orgs/$($parts[0])"
 }
 
-# The API pages at 100; an org can register far more runners than that, so walk
-# pages until one comes back short or the name is found.
-function Find-RunnerId($apiPath, $headers, $name) {
-	for ($page = 1; $page -le 20; $page++) {
-		$response = Invoke-RestMethod -Headers $headers `
-			-Uri "https://api.github.com/$apiPath/actions/runners?per_page=100&page=$page"
-		$match = $response.runners | Where-Object { $_.name -eq $name } | Select-Object -First 1
-		if ($match) { return $match.id }
-		if ($response.runners.Count -lt 100) { return $null }
+# Returns the id and the name this directory's runner registered under, from
+# `.runner`: the record config.cmd writes when it registers, with a UTF-8 BOM.
+# Returns nothing when the record is missing or unreadable, so the runner is found
+# by its own registration, never by a name guessed here.
+function Get-RegistrationRecord($runnerFile) {
+	try {
+		$text = [System.IO.File]::ReadAllText($runnerFile).TrimStart([char]0xFEFF)
+		$record = $text | ConvertFrom-Json
+	} catch {
+		return $null
 	}
-	return $null
+	$id = $record.agentId
+	if (-not ($id -is [int] -or $id -is [long]) -or $id -le 0) {
+		return $null
+	}
+	return [pscustomobject]@{
+		id   = $id
+		name = [string]$record.agentName
+	}
+}
+
+# Writes a warning to stderr: progress goes to stdout, and only warnings and
+# errors to stderr, so a healthy stop writes nothing there.
+function Write-StopWarning($message) {
+	[Console]::Error.WriteLine("github-runner stop: warning: $message")
 }
 
 # A job runs in Runner.Worker.exe, a child the listener spawns out of its own
@@ -141,41 +155,46 @@ if (-not (Test-Path (Join-Path $workDir 'config.cmd'))) {
 }
 $workDir = (Resolve-Path $workDir).Path
 
-$runnerName = $env:COMPUTERNAME
+$record = Get-RegistrationRecord (Join-Path $workDir '.runner')
+$runnerName = ''
+if ($record) {
+	$runnerName = $record.name
+	Write-Host "github-runner stop: found the runner in its registration record name=$runnerName id=$($record.id) file=$(Join-Path $workDir '.runner')"
+}
 # Absent is not fatal: without a credential there are no labels to take off, and
 # the wait for the current job below still holds.
 try { $credential = Get-Token } catch { $credential = '' }
 
 # A JSON registration holds no API credential and set its labels when it
 # registered, so there are no labels to take off: stopping the service once the
-# job below has finished is what keeps the listener from taking another.
+# job below has finished is what keeps the listener from taking another. A
+# directory with no readable `.runner` was never registered, or no longer is, so
+# there is no runner whose labels could be taken off.
 if (-not $credential) {
 	Write-Host "github-runner stop: no credential available; skipping the label step name=$runnerName"
 } elseif (Test-Minted $credential) {
 	Write-Host "github-runner stop: JSON registration; no labels to remove, relying on the service stop name=$runnerName"
 } elseif ($labelList.Count -eq 0) {
 	Write-Host "github-runner stop: no labels to remove; relying on the service stop name=$runnerName"
+} elseif (-not $record) {
+	Write-Host "github-runner stop: no registration record; no runner to unlabel file=$(Join-Path $workDir '.runner')"
 } else {
 	if (-not $Url) {
 		throw 'github-runner stop: -Url is required'
 	}
 	$headers = @{ Accept = 'application/vnd.github+json'; Authorization = "token $credential" }
 	$apiPath = Get-GitHubApiPath
-	$runnerId = Find-RunnerId $apiPath $headers $runnerName
-	if (-not $runnerId) {
-		Write-Host "github-runner stop: runner is not registered; nothing to unlabel name=$runnerName"
-	} else {
-		Write-Host "github-runner stop: removing the labels so no new job is routed here name=$runnerName id=$runnerId labels=$($labelList -join ',')"
-		# One request per label; a failure is logged and the rest still go. A label goes
-		# into the request path, so it is percent-encoded there: a slash, a question mark
-		# or a hash in it would otherwise change the URL.
-		foreach ($label in $labelList) {
-			try {
-				Invoke-RestMethod -Method Delete -Headers $headers `
-					-Uri "https://api.github.com/$apiPath/actions/runners/$runnerId/labels/$([uri]::EscapeDataString($label))" | Out-Null
-			} catch {
-				Write-Host "github-runner stop: label removal failed; continuing to wait for the current job name=$runnerName label=$label"
-			}
+	$runnerId = $record.id
+	Write-Host "github-runner stop: removing the labels so no new job is routed here name=$runnerName id=$runnerId labels=$($labelList -join ',')"
+	# One request per label; a failure is logged and the rest still go. A label goes
+	# into the request path, so it is percent-encoded there: a slash, a question mark
+	# or a hash in it would otherwise change the URL.
+	foreach ($label in $labelList) {
+		try {
+			Invoke-RestMethod -Method Delete -Headers $headers `
+				-Uri "https://api.github.com/$apiPath/actions/runners/$runnerId/labels/$([uri]::EscapeDataString($label))" | Out-Null
+		} catch {
+			Write-StopWarning "label removal failed; continuing to wait for the current job name=$runnerName label=$label"
 		}
 	}
 }

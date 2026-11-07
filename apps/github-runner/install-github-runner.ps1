@@ -79,7 +79,9 @@ try {
 		}
 		Write-Host 'Checksum verified'
 	} else {
-		Write-Host "GitHub did not publish a checksum for $archive; skipping verification"
+		# A warning, so stderr: progress goes to stdout, and only warnings and errors
+		# to stderr.
+		[Console]::Error.WriteLine("github-runner install: warning: no published checksum; skipping verification archive=$archive")
 	}
 	Expand-Archive -Force -Path $zip -DestinationPath $workDir
 } finally {
