@@ -278,5 +278,9 @@ if ($minted) {
 # The listener runs as the account that runs this script; there is no
 # unprivileged-user rule to satisfy on Windows.
 Write-Host "github-runner start: starting the listener name=$runnerName dir=$workDir"
-& .\run.cmd
+# The listener finishes and exits on Ctrl+C, the way a Windows service stops it.
+# cmd.exe, which runs run.cmd, answers Ctrl+C with "Terminate batch job (Y/N)?"
+# and waits for an answer on its input; reading from NUL, it gets none and ends
+# with the listener instead of holding the stop until it is killed.
+& cmd.exe /c 'run.cmd < NUL'
 exit $LASTEXITCODE
