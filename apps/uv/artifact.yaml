@@ -11,15 +11,22 @@ config:
       prerelease: false
       pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
       limit: 30
-  # Without a version (the `default` tag) install runs Astral's installer for the
-  # latest release, and leaves a uv that is already installed as it is.
+  # Without a version (the `default` tag) install fetches the latest release, and
+  # leaves a uv that is already installed as it is.
   install:
     command:
       unix: ["./install-uv-unix.sh", "--version=${version}"]
       windows: ["install-uv.ps1", "-Version:${version}"]
+  # Windows installs for every user, into one directory on the machine PATH, which
+  # uninstall removes again.
+  uninstall:
+    command:
+      unix: []
+      windows: ["uninstall-uv.ps1"]
 files:
   - install-uv-unix.sh
   - install-uv.ps1
+  - uninstall-uv.ps1
 platforms:
   - os: linux
     arch: amd64
