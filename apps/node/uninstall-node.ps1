@@ -3,7 +3,8 @@
 Removes one Node.js release that install-node.ps1 installed.
 
 .PARAMETER Version
-Node.js release, e.g. 20.17.0.
+Node.js release, e.g. 20.17.0. Defaults to the release the current junction
+points at.
 #>
 [CmdletBinding()]
 param(
@@ -12,8 +13,24 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+if (-not $env:ProgramFiles) {
+	throw 'node uninstall: ProgramFiles is required'
+}
+
 if (-not $Version) {
-	throw 'node uninstall: -Version is required'
+	# The install took the newest release because the request resolved to the
+	# implicit `default` tag, so remove the one the junction points at.
+	$link = Join-Path (Join-Path $env:ProgramFiles 'node') 'current'
+	if (-not (Test-Path -LiteralPath $link)) {
+		Write-Host 'node uninstall: no installed version to remove'
+		exit 0
+	}
+	$linkItem = Get-Item -LiteralPath $link -Force
+	if (-not ($linkItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+		Write-Host "node uninstall: $link is not a junction; leaving it in place"
+		exit 0
+	}
+	$Version = Split-Path -Leaf ([string] $linkItem.Target)
 }
 
 $requested = $Version

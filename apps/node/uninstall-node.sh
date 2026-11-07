@@ -3,12 +3,13 @@ set -eu
 
 usage() {
 	cat <<'USAGE'
-Usage: uninstall-node.sh --version=VERSION [--install-root=DIR] [--bin-dir=DIR]
+Usage: uninstall-node.sh [--version=VERSION] [--install-root=DIR] [--bin-dir=DIR]
 
 Removes one Node.js release that install-node.sh installed, and the node, npm,
 npx and corepack links that still point into it.
 
   --version=VERSION   Node.js release to remove, e.g. 20.17.0
+                      (default: the release the node link points at)
   --install-root=DIR  directory each release is unpacked under (default: /opt/node)
   --bin-dir=DIR       where the commands are linked (default: /usr/local/bin)
   --help              show this help
@@ -33,9 +34,24 @@ for arg; do
 	*) usage_error "unknown argument $arg" ;;
 	esac
 done
-[ -n "$requested" ] || usage_error "--version is required"
 [ -n "$root" ] || usage_error "--install-root must not be empty"
 [ -n "$bin_dir" ] || usage_error "--bin-dir must not be empty"
+
+if [ -z "$requested" ]; then
+	# The install took the newest release because the request resolved to the
+	# implicit `default` tag, so remove the one the node link points at.
+	target=$(readlink "$bin_dir/node" 2>/dev/null || true)
+	case "$target" in
+	"$root"/*/bin/node)
+		requested=${target#"$root"/}
+		requested=${requested%/bin/node}
+		;;
+	*)
+		echo "node uninstall: no installed version to remove"
+		exit 0
+		;;
+	esac
+fi
 
 version=${requested#v}
 case "$version" in
