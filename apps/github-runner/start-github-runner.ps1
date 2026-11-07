@@ -30,6 +30,11 @@ $ErrorActionPreference = 'Stop'
 # GitHub accepts nothing older than TLS 1.2.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
+# Progress to stdout through Write-Host; warnings and errors to stderr.
+function Write-Warn($message) {
+	[Console]::Error.WriteLine("github-runner start: warning: $message")
+}
+
 # Registration gives a machine its own runner identity, so it happens here — the
 # first time the runner starts on a machine that has none — and never in install:
 # an installed disk may be imaged and copied, and `config.cmd` writes `.runner`
@@ -153,14 +158,24 @@ function Find-RunnerId($apiPath, $headers, $name) {
 	return $null
 }
 
-# Returns the name a configured directory registered under, from the agentName in
-# `.runner` (which config.cmd writes with a UTF-8 BOM), or nothing if unreadable.
-function Get-RegisteredName($runnerFile) {
+# Returns the id and the name this directory's runner registered under, from
+# `.runner`: the record config.cmd writes when it registers, with a UTF-8 BOM.
+# Returns nothing when the record is missing or unreadable, so the runner is found
+# by its own registration, never by a name guessed here.
+function Get-RegistrationRecord($runnerFile) {
 	try {
 		$text = [System.IO.File]::ReadAllText($runnerFile).TrimStart([char]0xFEFF)
-		return ($text | ConvertFrom-Json).agentName
+		$record = $text | ConvertFrom-Json
 	} catch {
 		return $null
+	}
+	$id = $record.agentId
+	if (-not ($id -is [int] -or $id -is [long]) -or $id -le 0) {
+		return $null
+	}
+	return [pscustomobject]@{
+		id   = $id
+		name = [string]$record.agentName
 	}
 }
 
@@ -196,8 +211,8 @@ try { $credential = Get-Token } catch { $credential = '' }
 $minted = Test-Minted $credential
 
 if (Test-Path (Join-Path $workDir '.runner')) {
-	$registered = Get-RegisteredName (Join-Path $workDir '.runner')
-	if ($registered) { $runnerName = $registered }
+	$record = Get-RegistrationRecord (Join-Path $workDir '.runner')
+	if ($record -and $record.name) { $runnerName = $record.name }
 	Write-Host "github-runner start: already registered; reusing this machine's identity name=$runnerName dir=$workDir"
 } elseif ($minted) {
 	$registration = Get-MintedRegistration $credential
@@ -269,9 +284,7 @@ if ($minted) {
 			-Body $body -Uri "https://api.github.com/$labelApiPath/actions/runners/$runnerId/labels" | Out-Null
 		Write-Host "github-runner start: labels ensured name=$runnerName id=$runnerId labels=$runnerLabels"
 	} catch {
-		# A warning, so stderr: progress goes to stdout, and only warnings and errors
-		# to stderr.
-		[Console]::Error.WriteLine("github-runner start: warning: could not ensure the labels; starting without them name=$runnerName labels=$runnerLabels error=$($_.Exception.Message)")
+		Write-Warn "could not ensure the labels; starting without them name=$runnerName labels=$runnerLabels error=$($_.Exception.Message)"
 	}
 }
 

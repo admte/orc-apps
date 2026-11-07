@@ -43,8 +43,7 @@ for arg; do
 	esac
 done
 
-# Progress goes to stdout and only warnings and errors to stderr, so a healthy
-# install writes nothing there.
+# Progress to stdout; warnings and errors to stderr.
 note() {
 	echo "github-runner install: $*"
 }
