@@ -22,6 +22,11 @@ $ProgressPreference = 'SilentlyContinue'
 # GitHub accepts nothing older than TLS 1.2.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
+# Progress to stdout through Write-Host; warnings and errors to stderr.
+function Write-Warn($message) {
+	[Console]::Error.WriteLine("github-runner install: warning: $message")
+}
+
 # The name GitHub's runner archives use for this architecture.
 function Get-RunnerArch($arch) {
 	switch -CaseSensitive ($arch) {
@@ -79,9 +84,7 @@ try {
 		}
 		Write-Host 'Checksum verified'
 	} else {
-		# A warning, so stderr: progress goes to stdout, and only warnings and errors
-		# to stderr.
-		[Console]::Error.WriteLine("github-runner install: warning: no published checksum; skipping verification archive=$archive")
+		Write-Warn "no published checksum; skipping verification archive=$archive"
 	}
 	Expand-Archive -Force -Path $zip -DestinationPath $workDir
 } finally {

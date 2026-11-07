@@ -37,6 +37,11 @@ $ErrorActionPreference = 'Stop'
 # GitHub accepts nothing older than TLS 1.2.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
+# Progress to stdout through Write-Host; warnings and errors to stderr.
+function Write-Warn($message) {
+	[Console]::Error.WriteLine("github-runner stop: warning: $message")
+}
+
 # Runs before the listener is stopped, while it may still be mid-job. With a
 # personal access token, take -Labels off the runner so the queue stops routing
 # work here; in either mode, wait for the worker that is already running to finish,
@@ -125,12 +130,6 @@ function Get-RegistrationRecord($runnerFile) {
 	}
 }
 
-# Writes a warning to stderr: progress goes to stdout, and only warnings and
-# errors to stderr, so a healthy stop writes nothing there.
-function Write-StopWarning($message) {
-	[Console]::Error.WriteLine("github-runner stop: warning: $message")
-}
-
 # A job runs in Runner.Worker.exe, a child the listener spawns out of its own
 # directory; no worker means no job in flight.
 function Test-WorkerRunning($runnerDir) {
@@ -157,8 +156,11 @@ $workDir = (Resolve-Path $workDir).Path
 
 $record = Get-RegistrationRecord (Join-Path $workDir '.runner')
 $runnerName = ''
+# Names the runner in the lines below, or nothing when there is no record.
+$who = ''
 if ($record) {
 	$runnerName = $record.name
+	$who = " name=$runnerName"
 	Write-Host "github-runner stop: found the runner in its registration record name=$runnerName id=$($record.id) file=$(Join-Path $workDir '.runner')"
 }
 # Absent is not fatal: without a credential there are no labels to take off, and
@@ -171,11 +173,11 @@ try { $credential = Get-Token } catch { $credential = '' }
 # directory with no readable `.runner` was never registered, or no longer is, so
 # there is no runner whose labels could be taken off.
 if (-not $credential) {
-	Write-Host "github-runner stop: no credential available; skipping the label step name=$runnerName"
+	Write-Host "github-runner stop: no credential available; skipping the label step$who"
 } elseif (Test-Minted $credential) {
-	Write-Host "github-runner stop: JSON registration; no labels to remove, relying on the service stop name=$runnerName"
+	Write-Host "github-runner stop: JSON registration; no labels to remove, relying on the service stop$who"
 } elseif ($labelList.Count -eq 0) {
-	Write-Host "github-runner stop: no labels to remove; relying on the service stop name=$runnerName"
+	Write-Host "github-runner stop: no labels to remove; relying on the service stop$who"
 } elseif (-not $record) {
 	Write-Host "github-runner stop: no registration record; no runner to unlabel file=$(Join-Path $workDir '.runner')"
 } else {
@@ -194,24 +196,24 @@ if (-not $credential) {
 			Invoke-RestMethod -Method Delete -Headers $headers `
 				-Uri "https://api.github.com/$apiPath/actions/runners/$runnerId/labels/$([uri]::EscapeDataString($label))" | Out-Null
 		} catch {
-			Write-StopWarning "label removal failed; continuing to wait for the current job name=$runnerName label=$label"
+			Write-Warn "label removal failed; continuing to wait for the current job name=$runnerName label=$label"
 		}
 	}
 }
 
 if (-not (Test-WorkerRunning $workDir)) {
-	Write-Host "github-runner stop: no job in flight; safe to stop name=$runnerName"
+	Write-Host "github-runner stop: no job in flight; safe to stop$who"
 	exit 0
 }
 
-Write-Host "github-runner stop: waiting for the current job to finish name=$runnerName timeout=${jobTimeoutSeconds}s"
+Write-Host "github-runner stop: waiting for the current job to finish$who timeout=${jobTimeoutSeconds}s"
 $waited = 0
 while (Test-WorkerRunning $workDir) {
 	if ($waited -ge $jobTimeoutSeconds) {
-		throw "github-runner stop: job was still running after ${jobTimeoutSeconds}s name=$runnerName"
+		throw "github-runner stop: job was still running after ${jobTimeoutSeconds}s$who"
 	}
 	Start-Sleep -Seconds $pollSeconds
 	$waited += $pollSeconds
 }
 
-Write-Host "github-runner stop: job finished; safe to stop name=$runnerName waited=${waited}s"
+Write-Host "github-runner stop: job finished; safe to stop$who waited=${waited}s"

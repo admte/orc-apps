@@ -67,10 +67,13 @@ case $retry_interval in
 '' | *[!0-9]*) usage_error "--retry-interval must be a whole number of seconds" ;;
 esac
 
-# Progress goes to stdout and only warnings and errors to stderr, so a healthy
-# stopped writes nothing there.
+# Progress to stdout; warnings and errors to stderr.
 note() {
 	echo "github-runner stopped: $*"
+}
+
+warn() {
+	echo "github-runner stopped: warning: $*" >&2
 }
 
 need() {
@@ -181,6 +184,7 @@ while :; do
 	if [ "$attempt" -ge "$attempts" ]; then
 		fail "failed to deregister the runner after $attempts attempts"
 	fi
+	warn "deregistration attempt failed; retrying attempt=$attempt/$attempts"
 	attempt=$((attempt + 1))
 	sleep "$retry_interval"
 done

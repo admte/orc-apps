@@ -76,8 +76,7 @@ done
 [ -n "$service_user" ] || usage_error "--service-user must not be empty"
 parse_labels "$labels_arg"
 
-# Progress goes to stdout and only warnings and errors to stderr, so a healthy
-# start writes nothing there.
+# Progress to stdout; warnings and errors to stderr.
 note() {
 	echo "github-runner start: $*"
 }
@@ -249,23 +248,30 @@ ensure_labels() {
 	note "labels ensured name=$runner_name id=$runner_id labels=$labels"
 }
 
+# Prints the id and the name this directory's runner registered under, one per
+# line, from `.runner`: the record config.sh writes when it registers, with a
+# UTF-8 BOM. Prints nothing when the record is missing or unreadable, so the
+# runner is found by its own registration, never by a name guessed here.
+registration_record() {
+	python3 -c '
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8-sig") as f:
+        record = json.load(f)
+    runner_id = record.get("agentId")
+    name = record.get("agentName") or ""
+except Exception:
+    sys.exit(0)
+if isinstance(runner_id, int) and not isinstance(runner_id, bool) and runner_id > 0:
+    print(runner_id)
+    print(name)
+' "$1" 2>/dev/null || true
+}
+
 # setpriv, never su or runuser: those start a new session, which would take the
 # runner out of this script's process group, so a signal sent to the group would
 # miss it. The account has no home directory, so HOME points at the runner
 # directory it owns.
-# Prints the name a configured directory registered under, from the agentName in
-# `.runner` (which config.sh writes with a UTF-8 BOM), or nothing if unreadable.
-registered_name() {
-	python3 -c '
-import json
-try:
-    with open(".runner", encoding="utf-8-sig") as f:
-        print(json.load(f).get("agentName") or "")
-except Exception:
-    pass
-' 2>/dev/null || true
-}
-
 as_service_user() {
 	setpriv --reuid="$service_user" --regid="$service_user" --init-groups \
 		env HOME="$work_dir" "$@"
@@ -310,7 +316,7 @@ else
 fi
 
 if [ -f .runner ]; then
-	registered=$(registered_name)
+	registered=$(registration_record "$work_dir/.runner" | sed -n 2p)
 	runner_name=${registered:-$runner_name}
 	note "already registered; reusing this machine's identity name=$runner_name dir=$work_dir"
 elif [ "$minted" = yes ]; then

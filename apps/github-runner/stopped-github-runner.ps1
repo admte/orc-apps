@@ -36,6 +36,11 @@ $ErrorActionPreference = 'Stop'
 # GitHub accepts nothing older than TLS 1.2.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
+# Progress to stdout through Write-Host; warnings and errors to stderr.
+function Write-Warn($message) {
+	[Console]::Error.WriteLine("github-runner stopped: warning: $message")
+}
+
 # Runs after the listener has exited, so GitHub will not refuse the removal as
 # busy. A registration made with a personal access token is released on stop
 # reason `terminate` and on nothing else — a restart or a plain stop leaves this
@@ -141,7 +146,7 @@ try {
 			if ($attempt -ge $attemptCount) {
 				throw "github-runner stopped: failed to deregister the runner after $attemptCount attempts: $_"
 			}
-			Write-Host "github-runner stopped: deregistration attempt failed; retrying attempt=$attempt/$attemptCount"
+			Write-Warn "deregistration attempt failed; retrying attempt=$attempt/$attemptCount error=$($_.Exception.Message)"
 			Start-Sleep -Seconds $retrySeconds
 		}
 	}

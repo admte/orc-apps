@@ -85,8 +85,7 @@ case $poll_interval in
 esac
 parse_labels "$labels_arg"
 
-# Progress goes to stdout and only warnings and errors to stderr, so a healthy
-# stop writes nothing there.
+# Progress to stdout; warnings and errors to stderr.
 note() {
 	echo "github-runner stop: $*"
 }
@@ -194,7 +193,10 @@ work_dir=$(CDPATH= cd -- "$work_dir" && pwd)
 record=$(registration_record "$work_dir/.runner")
 runner_id=$(printf '%s\n' "$record" | sed -n 1p)
 runner_name=$(printf '%s\n' "$record" | sed -n 2p)
+# Names the runner in the lines below, or nothing when there is no record.
+who=
 if [ -n "$runner_id" ]; then
+	who=" name=$runner_name"
 	note "found the runner in its registration record name=$runner_name id=$runner_id file=$work_dir/.runner"
 fi
 # Absent is not fatal: without a credential there are no labels to take off, and
@@ -207,11 +209,11 @@ credential=$(token_value 2>/dev/null) || credential=
 # no readable `.runner` was never registered, or no longer is, so there is no
 # runner whose labels could be taken off.
 if [ -z "$credential" ]; then
-	note "no credential available; skipping the label step name=$runner_name"
+	note "no credential available; skipping the label step$who"
 elif is_minted "$credential"; then
-	note "JSON registration; no labels to remove, relying on the stop signal name=$runner_name"
+	note "JSON registration; no labels to remove, relying on the stop signal$who"
 elif [ -z "$labels" ]; then
-	note "no labels to remove; relying on the stop signal name=$runner_name"
+	note "no labels to remove; relying on the stop signal$who"
 elif [ -z "$runner_id" ]; then
 	note "no registration record; no runner to unlabel file=$work_dir/.runner"
 else
@@ -223,18 +225,18 @@ else
 fi
 
 if ! worker_running; then
-	note "no job in flight; safe to stop name=$runner_name"
+	note "no job in flight; safe to stop$who"
 	exit 0
 fi
 
-note "waiting for the current job to finish name=$runner_name timeout=${job_timeout}s"
+note "waiting for the current job to finish$who timeout=${job_timeout}s"
 waited=0
 while worker_running; do
 	if [ "$waited" -ge "$job_timeout" ]; then
-		fail "job was still running after ${job_timeout}s name=$runner_name"
+		fail "job was still running after ${job_timeout}s$who"
 	fi
 	sleep "$poll_interval"
 	waited=$((waited + poll_interval))
 done
 
-note "job finished; safe to stop name=$runner_name waited=${waited}s"
+note "job finished; safe to stop$who waited=${waited}s"
