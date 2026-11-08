@@ -35,7 +35,7 @@ if (-not $Version) {
 		"$api/info/release_versions?release_type=ga&$selector" +
 		'&page_size=1&sort_method=DEFAULT&sort_order=DESC'
 	)
-	$semver = @($latest.versions) | Select-Object -First 1 -ExpandProperty semver
+	$semver = @($latest.versions)[0].semver
 	if ($semver -notmatch '^(\d+\.\d+\.\d+)') {
 		throw "java install: could not determine the newest release for windows/$architecture"
 	}
