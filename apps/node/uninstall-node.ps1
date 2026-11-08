@@ -3,7 +3,7 @@
 Removes one Node.js release that install-node.ps1 installed.
 
 .PARAMETER Version
-Node.js release, e.g. 20.17.0.
+Node.js release, e.g. 20.17.0 (default: the current release).
 #>
 [CmdletBinding()]
 param(
@@ -13,7 +13,15 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if (-not $Version) {
-	throw 'node uninstall: -Version is required'
+	# The install ran without a version and took the then-newest release, so the
+	# release the current junction points at is the one to remove.
+	$current = Join-Path (Join-Path $env:ProgramFiles 'node') 'current'
+	$item = Get-Item -LiteralPath $current -Force -ErrorAction SilentlyContinue
+	if (-not $item -or -not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+		Write-Host 'node uninstall: no installed release to remove'
+		exit 0
+	}
+	$Version = Split-Path -Leaf ([string]$item.Target).TrimEnd('\')
 }
 
 $requested = $Version

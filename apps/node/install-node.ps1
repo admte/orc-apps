@@ -3,7 +3,7 @@
 Installs one Node.js release and puts it on the machine PATH.
 
 .PARAMETER Version
-Node.js release, e.g. 20.17.0.
+Node.js release, e.g. 20.17.0 (default: the newest release).
 #>
 [CmdletBinding()]
 param(
@@ -11,15 +11,22 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Progress rendering slows downloads and archive expansion many times over.
+$ProgressPreference = 'SilentlyContinue'
 
-if (-not $Version) {
-	throw 'node install: -Version is required'
-}
 if (-not $env:ProgramFiles) {
 	throw 'node install: ProgramFiles is required'
 }
 
 $requested = $Version
+if (-not $requested) {
+	# The release index lists the newest release first.
+	$requested = @(Invoke-RestMethod -UseBasicParsing -Uri 'https://nodejs.org/dist/index.json') |
+		Select-Object -First 1 -ExpandProperty version
+	if (-not $requested) {
+		throw 'node install: could not determine the newest Node.js release'
+	}
+}
 $version = $requested.TrimStart('v')
 if ($version -notmatch '^\d+\.\d+\.\d+$') {
 	throw "node install: invalid version: $requested"

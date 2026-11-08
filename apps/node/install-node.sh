@@ -3,12 +3,12 @@ set -eu
 
 usage() {
 	cat <<'USAGE'
-Usage: install-node.sh --version=VERSION [--install-root=DIR] [--bin-dir=DIR]
+Usage: install-node.sh [--version=VERSION] [--install-root=DIR] [--bin-dir=DIR]
 
 Installs one Node.js release under its own directory and links node, npm, npx
-and corepack onto PATH.
+and corepack onto PATH. Without --version it installs the newest release.
 
-  --version=VERSION   Node.js release to install, e.g. 20.17.0
+  --version=VERSION   Node.js release to install, e.g. 20.17.0 (default: newest)
   --install-root=DIR  directory each release is unpacked under (default: /opt/node)
   --bin-dir=DIR       where the commands are linked (default: /usr/local/bin)
   --help              show this help
@@ -38,7 +38,6 @@ for arg; do
 	*) usage_error "unknown argument $arg" ;;
 	esac
 done
-[ -n "$requested" ] || usage_error "--version is required"
 [ -n "$root" ] || usage_error "--install-root must not be empty"
 [ -n "$bin_dir" ] || usage_error "--bin-dir must not be empty"
 
@@ -51,6 +50,13 @@ aarch64 | arm64) arch=arm64 ;;
 *) fail "unsupported architecture: $(uname -m)" ;;
 esac
 
+if [ -z "$requested" ]; then
+	# The release index lists the newest release first.
+	requested=$(curl -fsSL https://nodejs.org/dist/index.json | tr ',' '\n' |
+		sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\(v[0-9.]*\)".*/\1/p' | head -n 1) ||
+		fail "could not determine the newest Node.js release"
+	[ -n "$requested" ] || fail "could not determine the newest Node.js release"
+fi
 version=${requested#v}
 case "$version" in
 '' | *[!0-9.]* | .* | *..* | *.) fail "invalid version: $requested" ;;

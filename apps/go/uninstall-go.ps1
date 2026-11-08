@@ -3,7 +3,7 @@
 Removes one Go release that install-go.ps1 installed.
 
 .PARAMETER Version
-Go release, e.g. 1.22.5.
+Go release, e.g. 1.22.5 (default: the current release).
 #>
 [CmdletBinding()]
 param(
@@ -13,7 +13,15 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if (-not $Version) {
-	throw 'go uninstall: -Version is required'
+	# The install ran without a version and took the then-newest release, so the
+	# release the current junction points at is the one to remove.
+	$current = Join-Path (Join-Path $env:ProgramFiles 'go') 'current'
+	$item = Get-Item -LiteralPath $current -Force -ErrorAction SilentlyContinue
+	if (-not $item -or -not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+		Write-Host 'go uninstall: no installed release to remove'
+		exit 0
+	}
+	$Version = Split-Path -Leaf ([string]$item.Target).TrimEnd('\')
 }
 
 $requested = $Version
