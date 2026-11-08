@@ -20,6 +20,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Progress rendering slows downloads and archive expansion many times over.
+$ProgressPreference = "SilentlyContinue"
 
 if (-not $Version -and (Get-Command vault -ErrorAction SilentlyContinue)) {
     vault version

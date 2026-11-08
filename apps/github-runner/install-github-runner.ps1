@@ -16,6 +16,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Progress rendering slows downloads and archive expansion many times over.
+$ProgressPreference = 'SilentlyContinue'
 # Windows PowerShell on Server 2016 offers only TLS 1.0 and 1.1 by default, and
 # GitHub accepts nothing older than TLS 1.2.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
