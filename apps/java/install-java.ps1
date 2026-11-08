@@ -86,8 +86,11 @@ try {
 	New-Item -ItemType Directory -Path $work -Force | Out-Null
 	$archive = Join-Path $work 'jdk.zip'
 	Invoke-WebRequest -UseBasicParsing -Uri $binaryUrl -OutFile $archive
-	$checksumResponse = Invoke-WebRequest -UseBasicParsing -Uri $checksumUrl
-	$expected = (($checksumResponse.Content.Trim() -split '\s+')[0]).ToLowerInvariant()
+	# Saved to a file: Windows PowerShell returns this response's content as bytes.
+	$checksumFile = Join-Path $work 'jdk.zip.sha256.txt'
+	Invoke-WebRequest -UseBasicParsing -Uri $checksumUrl -OutFile $checksumFile
+	$checksumText = [System.IO.File]::ReadAllText($checksumFile).Trim()
+	$expected = (($checksumText -split '\s+')[0]).ToLowerInvariant()
 	if ($expected -notmatch '^[0-9a-f]{64}$') {
 		throw "java install: Adoptium did not publish a checksum for $release"
 	}
