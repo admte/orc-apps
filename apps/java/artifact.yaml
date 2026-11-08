@@ -6,7 +6,9 @@ annotations:
 config:
   versions:
     source: json
-    url: "https://api.adoptium.net/v3/info/release_versions?release_type=ga&vendor=eclipse&sort_method=DEFAULT&sort_order=DESC&page_size=50"
+    # Only releases with a Windows x64 JDK: Windows builds lag Linux, so a release
+    # listed here installs on every declared platform.
+    url: "https://api.adoptium.net/v3/info/release_versions?release_type=ga&vendor=eclipse&os=windows&architecture=x64&image_type=jdk&sort_method=DEFAULT&sort_order=DESC&page_size=50"
     select: /versions
     field: semver
     filter:

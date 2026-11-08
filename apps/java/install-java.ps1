@@ -4,7 +4,7 @@ Installs one Eclipse Temurin JDK release from Adoptium, puts it on the machine P
 sets JAVA_HOME.
 
 .PARAMETER Version
-JDK release, e.g. 21.0.4.
+JDK release, e.g. 21.0.4 (default: the newest release built for this machine).
 #>
 [CmdletBinding()]
 param(
@@ -12,13 +12,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Progress rendering slows downloads and archive expansion many times over.
+$ProgressPreference = 'SilentlyContinue'
 
-if (-not $Version) {
-	throw 'java install: -Version is required'
-}
-if ($Version -notmatch '^\d+\.\d+\.\d+$') {
-	throw "java install: invalid version: $Version"
-}
 if (-not $env:ProgramFiles) {
 	throw 'java install: ProgramFiles is required'
 }
@@ -33,21 +29,47 @@ $api = 'https://api.adoptium.net/v3'
 $selector = "os=windows&architecture=$architecture&image_type=jdk&jvm_impl=hotspot" +
 	'&heap_size=normal&vendor=eclipse&project=jdk'
 
+if (-not $Version) {
+	# The newest release with a build for this machine, as major.minor.security.
+	$latest = Invoke-RestMethod -UseBasicParsing -Uri (
+		"$api/info/release_versions?release_type=ga&$selector" +
+		'&page_size=1&sort_method=DEFAULT&sort_order=DESC'
+	)
+	$semver = @($latest.versions) | Select-Object -First 1 -ExpandProperty semver
+	if ($semver -notmatch '^(\d+\.\d+\.\d+)') {
+		throw "java install: could not determine the newest release for windows/$architecture"
+	}
+	$Version = $Matches[1]
+}
+if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+	throw "java install: invalid version: $Version"
+}
+
 # -Version is the release; [X,X.1) resolves its newest build for this machine.
+# Adoptium answers 404 when it has no build of that release for this platform.
 $range = [uri]::EscapeDataString("[$Version,$Version.1)")
-$names = Invoke-RestMethod -UseBasicParsing -Uri (
-	"$api/info/release_names?release_type=ga&version=$range&$selector" +
-	'&page_size=1&sort_method=DEFAULT&sort_order=DESC'
-)
+try {
+	$names = Invoke-RestMethod -UseBasicParsing -Uri (
+		"$api/info/release_names?release_type=ga&version=$range&$selector" +
+		'&page_size=1&sort_method=DEFAULT&sort_order=DESC'
+	)
+} catch {
+	$status = $_.Exception.Response.StatusCode.value__
+	if ($status -ne 404) {
+		throw
+	}
+	$names = $null
+}
 $release = @($names.releases) | Select-Object -First 1
 if (-not $release) {
-	throw "java install: Adoptium publishes no $Version release for windows/$architecture"
+	throw "java install: Adoptium publishes no build of $Version for windows/$architecture"
 }
+# java -version reports the release's own version: 27 for jdk-27+35,
+# 27.0.1.0.2 for jdk-27.0.1.0.2+1, and 1.8.0_<security> for Java 8.
 if ($release -match '^jdk8u(\d+)-b\d+$') {
-	# Java 8 reports 1.8.0_<security>.
 	$expectedVersion = "1.8.0_$($Matches[1])"
-} elseif ($release -match '^jdk-\d+(\.\d+)*\+') {
-	$expectedVersion = $Version
+} elseif ($release -match '^jdk-(\d+(\.\d+)*)\+') {
+	$expectedVersion = $Matches[1]
 } else {
 	throw "java install: unexpected release name from Adoptium: $release"
 }

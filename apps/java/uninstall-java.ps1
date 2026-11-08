@@ -3,7 +3,7 @@
 Removes one JDK release that install-java.ps1 installed.
 
 .PARAMETER Version
-JDK release, e.g. 21.0.4.
+JDK release, e.g. 21.0.4 (default: the current release).
 #>
 [CmdletBinding()]
 param(
@@ -13,7 +13,15 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if (-not $Version) {
-	throw 'java uninstall: -Version is required'
+	# The install ran without a version and took the then-newest release, so the
+	# release the current junction points at is the one to remove.
+	$current = Join-Path (Join-Path $env:ProgramFiles 'java') 'current'
+	$item = Get-Item -LiteralPath $current -Force -ErrorAction SilentlyContinue
+	if (-not $item -or -not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+		Write-Host 'java uninstall: no installed release to remove'
+		exit 0
+	}
+	$Version = Split-Path -Leaf ([string]$item.Target).TrimEnd('\')
 }
 if ($Version -notmatch '^\d+\.\d+\.\d+$') {
 	throw "java uninstall: invalid version: $Version"
