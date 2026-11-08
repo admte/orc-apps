@@ -7,7 +7,7 @@ that service account.
 File holding a service account JSON key.
 
 .PARAMETER InstallDir
-Where install put the SDK (default: Google\Cloud SDK under LOCALAPPDATA).
+Where install put the SDK (default: Google\Cloud SDK under Program Files).
 #>
 [CmdletBinding()]
 param(
@@ -24,7 +24,7 @@ if ($command) {
 	$installRoot = if ($InstallDir) {
 		$InstallDir
 	} else {
-		Join-Path $env:LOCALAPPDATA 'Google\Cloud SDK'
+		Join-Path $env:ProgramFiles 'Google\Cloud SDK'
 	}
 	$candidates = @(
 		(Join-Path $installRoot 'google-cloud-sdk\bin\gcloud.cmd'),
