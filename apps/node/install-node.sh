@@ -51,9 +51,10 @@ aarch64 | arm64) arch=arm64 ;;
 esac
 
 if [ -z "$requested" ]; then
-	# The release index lists the newest release first.
+	# The release index lists the newest release first, prereleases included;
+	# the pattern skips those (v27.0.0-alpha.0.0.0).
 	requested=$(curl -fsSL https://nodejs.org/dist/index.json | tr ',' '\n' |
-		sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\(v[0-9.]*\)".*/\1/p' | head -n 1) ||
+		sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' | head -n 1) ||
 		fail "could not determine the newest Node.js release"
 	[ -n "$requested" ] || fail "could not determine the newest Node.js release"
 fi
