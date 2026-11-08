@@ -23,7 +23,11 @@ if ($AgentBin -and (Test-Path -LiteralPath $AgentBin -PathType Leaf)) {
 	if ($command) {
 		$agent = $command.Source
 	} else {
+		# The official installer puts the CLI under LOCALAPPDATA and adds it only to
+		# the user's PATH, which a process started before the install does not see.
 		$candidates = @(
+			(Join-Path $env:LOCALAPPDATA 'cursor-agent\agent.exe'),
+			(Join-Path $env:LOCALAPPDATA 'cursor-agent\agent.cmd'),
 			(Join-Path $env:USERPROFILE '.local\bin\agent.exe'),
 			(Join-Path $env:USERPROFILE '.local\bin\agent.cmd')
 		)

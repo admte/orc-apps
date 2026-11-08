@@ -14,6 +14,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Progress rendering slows downloads many times over.
+$ProgressPreference = 'SilentlyContinue'
 
 $existing = Get-Command agent -ErrorAction SilentlyContinue
 if ($existing -and -not $Force) {
@@ -46,7 +48,11 @@ try {
 	if ($command) {
 		$agent = $command.Source
 	} else {
+		# The official installer puts the CLI under LOCALAPPDATA and adds it only to
+		# the user's PATH, which a process started before the install does not see.
 		$candidates = @(
+			(Join-Path $env:LOCALAPPDATA 'cursor-agent\agent.exe'),
+			(Join-Path $env:LOCALAPPDATA 'cursor-agent\agent.cmd'),
 			(Join-Path $env:USERPROFILE '.local\bin\agent.exe'),
 			(Join-Path $env:USERPROFILE '.local\bin\agent.cmd')
 		)
