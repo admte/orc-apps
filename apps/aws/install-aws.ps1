@@ -19,6 +19,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Progress rendering slows downloads many times over.
+$ProgressPreference = 'SilentlyContinue'
 
 $existing = Get-Command aws -ErrorAction SilentlyContinue
 if ($existing -and -not $Version -and -not $Force) {
