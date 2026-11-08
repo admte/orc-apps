@@ -3,12 +3,12 @@ set -eu
 
 usage() {
 	cat <<'USAGE'
-Usage: install-go.sh --version=VERSION [--install-root=DIR] [--bin-dir=DIR]
+Usage: install-go.sh [--version=VERSION] [--install-root=DIR] [--bin-dir=DIR]
 
 Installs one Go release under its own directory and links go and gofmt onto
-PATH.
+PATH. Without --version it installs the latest stable release.
 
-  --version=VERSION   Go release to install, e.g. 1.22.5
+  --version=VERSION   Go release to install, e.g. 1.22.5 (default: latest)
   --install-root=DIR  directory each release is unpacked under (default: /opt/go)
   --bin-dir=DIR       where go and gofmt are linked (default: /usr/local/bin)
   --help              show this help
@@ -38,7 +38,6 @@ for arg; do
 	*) usage_error "unknown argument $arg" ;;
 	esac
 done
-[ -n "$requested" ] || usage_error "--version is required"
 [ -n "$root" ] || usage_error "--install-root must not be empty"
 [ -n "$bin_dir" ] || usage_error "--bin-dir must not be empty"
 
@@ -51,6 +50,11 @@ aarch64 | arm64) arch=arm64 ;;
 *) fail "unsupported architecture: $(uname -m)" ;;
 esac
 
+if [ -z "$requested" ]; then
+	requested=$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -n 1) ||
+		fail "could not determine the latest Go release"
+	[ -n "$requested" ] || fail "could not determine the latest Go release"
+fi
 version=${requested#go}
 case "$version" in
 '' | *[!0-9.]* | .* | *..* | *.) fail "invalid version: $requested" ;;

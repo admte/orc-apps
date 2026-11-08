@@ -3,7 +3,7 @@
 Installs one Go release and puts it on the machine PATH.
 
 .PARAMETER Version
-Go release, e.g. 1.22.5.
+Go release, e.g. 1.22.5 (default: the latest stable release).
 #>
 [CmdletBinding()]
 param(
@@ -11,15 +11,23 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Progress rendering slows downloads and archive expansion many times over.
+$ProgressPreference = 'SilentlyContinue'
 
-if (-not $Version) {
-	throw 'go install: -Version is required'
-}
 if (-not $env:ProgramFiles) {
 	throw 'go install: ProgramFiles is required'
 }
 
+$releases = Invoke-RestMethod -UseBasicParsing -Uri 'https://go.dev/dl/?mode=json&include=all'
 $requested = $Version
+if (-not $requested) {
+	# The release list is newest first.
+	$requested = @($releases | Where-Object { $_.stable }) |
+		Select-Object -First 1 -ExpandProperty version
+	if (-not $requested) {
+		throw 'go install: could not determine the latest Go release'
+	}
+}
 $version = $requested -replace '^go', ''
 if ($version -notmatch '^\d+\.\d+(\.\d+)?$') {
 	throw "go install: invalid version: $requested"
@@ -38,7 +46,6 @@ $work = Join-Path ([System.IO.Path]::GetTempPath()) "go-$([guid]::NewGuid())"
 
 try {
 	New-Item -ItemType Directory -Path $work -Force | Out-Null
-	$releases = Invoke-RestMethod -UseBasicParsing -Uri 'https://go.dev/dl/?mode=json&include=all'
 	$release = $releases | Where-Object { $_.version -eq "go$version" } | Select-Object -First 1
 	$file = $release.files | Where-Object {
 		$_.filename -eq $asset -and $_.kind -eq 'archive'
