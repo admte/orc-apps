@@ -3,7 +3,8 @@
 Removes one JDK release that install-java.ps1 installed.
 
 .PARAMETER Version
-JDK release, e.g. 21.0.4.
+JDK release, e.g. 21.0.4. Defaults to the release the current junction points
+at.
 #>
 [CmdletBinding()]
 param(
@@ -12,9 +13,26 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-if (-not $Version) {
-	throw 'java uninstall: -Version is required'
+if (-not $env:ProgramFiles) {
+	throw 'java uninstall: ProgramFiles is required'
 }
+
+if (-not $Version) {
+	# The install took the newest release because the request resolved to the
+	# implicit `default` tag, so remove the one the junction points at.
+	$link = Join-Path (Join-Path $env:ProgramFiles 'java') 'current'
+	if (-not (Test-Path -LiteralPath $link)) {
+		Write-Host 'java uninstall: no installed version to remove'
+		exit 0
+	}
+	$linkItem = Get-Item -LiteralPath $link -Force
+	if (-not ($linkItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+		Write-Host "java uninstall: $link is not a junction; leaving it in place"
+		exit 0
+	}
+	$Version = Split-Path -Leaf ([string] $linkItem.Target)
+}
+
 if ($Version -notmatch '^\d+\.\d+\.\d+$') {
 	throw "java uninstall: invalid version: $Version"
 }

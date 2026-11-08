@@ -3,12 +3,13 @@ set -eu
 
 usage() {
 	cat <<'USAGE'
-Usage: uninstall-java.sh --version=VERSION [--install-root=DIR] [--bin-dir=DIR]
+Usage: uninstall-java.sh [--version=VERSION] [--install-root=DIR] [--bin-dir=DIR]
 
 Removes one JDK release that install-java.sh installed, and the command links
 that still point into it.
 
   --version=VERSION   JDK release to remove, e.g. 21.0.4
+                      (default: the release the current link points at)
   --install-root=DIR  directory each release is unpacked under (default: /opt/java)
   --bin-dir=DIR       where the JDK commands are linked (default: /usr/local/bin)
   --help              show this help
@@ -33,9 +34,23 @@ for arg; do
 	*) usage_error "unknown argument $arg" ;;
 	esac
 done
-[ -n "$version" ] || usage_error "--version is required"
 [ -n "$root" ] || usage_error "--install-root must not be empty"
 [ -n "$bin_dir" ] || usage_error "--bin-dir must not be empty"
+
+if [ -z "$version" ]; then
+	# The install took the newest release because the request resolved to the
+	# implicit `default` tag, so remove the one the current link points at.
+	target=$(readlink "$root/current" 2>/dev/null || true)
+	case "$target" in
+	"$root"/*)
+		version=${target##*/}
+		;;
+	*)
+		echo "java uninstall: no installed version to remove"
+		exit 0
+		;;
+	esac
+fi
 
 case "$version" in
 '' | *[!0-9.]* | .* | *..* | *.)

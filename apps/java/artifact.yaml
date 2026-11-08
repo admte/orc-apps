@@ -6,7 +6,11 @@ annotations:
 config:
   versions:
     source: json
-    url: "https://api.adoptium.net/v3/info/release_versions?release_type=ga&vendor=eclipse&sort_method=DEFAULT&sort_order=DESC&page_size=50"
+    # Adoptium builds each platform on its own schedule, so a release can exist
+    # for Linux and not yet for Windows: 27.0.1 is Linux only today. Ask for the
+    # versions Windows x64 has, the narrowest of this app's platforms, so the
+    # catalog never offers one that a node here cannot install.
+    url: "https://api.adoptium.net/v3/info/release_versions?release_type=ga&vendor=eclipse&os=windows&architecture=x64&image_type=jdk&sort_method=DEFAULT&sort_order=DESC&page_size=50"
     select: /versions
     field: semver
     filter:
@@ -14,8 +18,9 @@ config:
       pattern: '^(?P<version>\d+\.\d+\.\d+)\+.*$'
       latest_per: minor
       limit: 30
-  # Each release installs into its own directory, so install and uninstall both
-  # name the version they act on.
+  # Each release installs into its own directory. Without a version (the
+  # `default` tag) install takes the newest release Adoptium publishes, and
+  # uninstall removes the release the current link points at.
   install:
     command:
       unix: ["./install-java.sh", "--version=${version}"]
