@@ -20,10 +20,9 @@ if (-not $env:ProgramFiles) {
 
 $requested = $Version
 if (-not $requested) {
-	# The release index lists the newest release first. Windows PowerShell returns
-	# a JSON array as one object, so index it rather than pipe it.
+	# The release index lists the newest release first, prereleases included.
 	$index = Invoke-RestMethod -UseBasicParsing -Uri 'https://nodejs.org/dist/index.json'
-	$requested = @($index)[0].version
+	$requested = @($index | Where-Object { $_.version -match '^v\d+\.\d+\.\d+$' })[0].version
 	if (-not $requested) {
 		throw 'node install: could not determine the newest Node.js release'
 	}
