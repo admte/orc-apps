@@ -1,11 +1,11 @@
-artifactType: application/vnd.orc8r.app.v1
+artifactType: application/vnd.orc8r.app.v2
 annotations:
   org.opencontainers.image.title: docker
   # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
   org.opencontainers.image.description: Install the Docker engine
 config:
   install:
-    command: sh install-docker.sh
+    command: ["./install-docker.sh"]
 files:
   - install-docker.sh
 platforms:

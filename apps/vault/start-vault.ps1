@@ -1,42 +1,66 @@
+<#
+.SYNOPSIS
+Checks that the Vault CLI is installed and, given an AppRole role ID, signs it in.
+
+.DESCRIPTION
+With -RoleIdFile it logs in with AppRole and stores the token for the vault command.
+
+.PARAMETER Addr
+Vault server URL, set as VAULT_ADDR for the vault CLI.
+
+.PARAMETER RoleIdFile
+File holding the AppRole role ID.
+
+.PARAMETER SecretIdFile
+File holding the AppRole secret ID, for roles that require one; needs -RoleIdFile.
+
+.PARAMETER InstallDir
+Where install put vault.exe, looked in when vault is not on PATH; defaults to
+%LOCALAPPDATA%\Programs\Vault.
+#>
+[CmdletBinding()]
+param(
+    [string]$Addr = '',
+    [string]$RoleIdFile = '',
+    [string]$SecretIdFile = '',
+    [string]$InstallDir = ''
+)
+
 $ErrorActionPreference = "Stop"
 
-function Get-OrcParameter {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string] $Name
-    )
+# The vault CLI reads the server address from VAULT_ADDR.
+if ($Addr) {
+    $env:VAULT_ADDR = $Addr
+}
 
-    $value = [Environment]::GetEnvironmentVariable($Name)
-    $file = [Environment]::GetEnvironmentVariable("${Name}_FILE")
-    if ($file) {
-        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
-            throw "vault configure: credential file is not readable"
-        }
-        return ([System.IO.File]::ReadAllText($file)).TrimEnd([char[]]"`r`n")
+function Read-CredentialFile([string]$Path) {
+    if (-not $Path) {
+        return ''
     }
-    return $value
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "vault configure: credential file is not readable"
+    }
+    return ([System.IO.File]::ReadAllText($Path)).TrimEnd([char[]]"`r`n")
 }
 
 $vaultCommand = Get-Command vault -ErrorAction SilentlyContinue
 if ($vaultCommand) {
     $vaultExe = $vaultCommand.Source
 } else {
-    $installDir = if ($env:VAULT_INSTALL_DIR) {
-        $env:VAULT_INSTALL_DIR
-    } else {
-        Join-Path $env:LOCALAPPDATA "Programs\Vault"
+    if (-not $InstallDir) {
+        $InstallDir = Join-Path $env:LOCALAPPDATA "Programs\Vault"
     }
-    $vaultExe = Join-Path $installDir "vault.exe"
+    $vaultExe = Join-Path $InstallDir "vault.exe"
 }
 if (-not (Test-Path -LiteralPath $vaultExe -PathType Leaf)) {
     throw "vault configure: vault CLI is not installed"
 }
 
-$roleId = Get-OrcParameter -Name "VAULT_ROLE_ID"
-$secretId = Get-OrcParameter -Name "VAULT_SECRET_ID"
+$roleId = Read-CredentialFile $RoleIdFile
+$secretId = Read-CredentialFile $SecretIdFile
 
 if (-not $roleId -and $secretId) {
-    throw "vault configure: vault_role_id is required when vault_secret_id is provided"
+    throw "vault configure: -RoleIdFile is required when -SecretIdFile is given"
 }
 
 if (-not $roleId) {

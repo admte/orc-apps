@@ -1,11 +1,20 @@
-$ErrorActionPreference = 'Stop'
+<#
+.SYNOPSIS
+Installs one Eclipse Temurin JDK release from Adoptium, puts it on the machine PATH and
+sets JAVA_HOME.
 
-if (-not $env:APP_VERSION) {
-	throw 'java install: APP_VERSION is required'
-}
-if ($env:APP_VERSION -notmatch '^\d+\.\d+\.\d+$') {
-	throw "java install: invalid APP_VERSION: $env:APP_VERSION"
-}
+.PARAMETER Version
+JDK release, e.g. 21.0.4 (default: the newest release built for this machine).
+#>
+[CmdletBinding()]
+param(
+	[string]$Version = ''
+)
+
+$ErrorActionPreference = 'Stop'
+# Progress rendering slows downloads and archive expansion many times over.
+$ProgressPreference = 'SilentlyContinue'
+
 if (-not $env:ProgramFiles) {
 	throw 'java install: ProgramFiles is required'
 }
@@ -20,21 +29,47 @@ $api = 'https://api.adoptium.net/v3'
 $selector = "os=windows&architecture=$architecture&image_type=jdk&jvm_impl=hotspot" +
 	'&heap_size=normal&vendor=eclipse&project=jdk'
 
-# APP_VERSION is the release; [X,X.1) resolves its newest build for this node.
-$range = [uri]::EscapeDataString("[$($env:APP_VERSION),$($env:APP_VERSION).1)")
-$names = Invoke-RestMethod -UseBasicParsing -Uri (
-	"$api/info/release_names?release_type=ga&version=$range&$selector" +
-	'&page_size=1&sort_method=DEFAULT&sort_order=DESC'
-)
+if (-not $Version) {
+	# The newest release with a build for this machine, as major.minor.security.
+	$latest = Invoke-RestMethod -UseBasicParsing -Uri (
+		"$api/info/release_versions?release_type=ga&$selector" +
+		'&page_size=1&sort_method=DEFAULT&sort_order=DESC'
+	)
+	$semver = @($latest.versions)[0].semver
+	if ($semver -notmatch '^(\d+\.\d+\.\d+)') {
+		throw "java install: could not determine the newest release for windows/$architecture"
+	}
+	$Version = $Matches[1]
+}
+if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+	throw "java install: invalid version: $Version"
+}
+
+# -Version is the release; [X,X.1) resolves its newest build for this machine.
+# Adoptium answers 404 when it has no build of that release for this platform.
+$range = [uri]::EscapeDataString("[$Version,$Version.1)")
+try {
+	$names = Invoke-RestMethod -UseBasicParsing -Uri (
+		"$api/info/release_names?release_type=ga&version=$range&$selector" +
+		'&page_size=1&sort_method=DEFAULT&sort_order=DESC'
+	)
+} catch {
+	$status = $_.Exception.Response.StatusCode.value__
+	if ($status -ne 404) {
+		throw
+	}
+	$names = $null
+}
 $release = @($names.releases) | Select-Object -First 1
 if (-not $release) {
-	throw "java install: Adoptium publishes no $env:APP_VERSION release for windows/$architecture"
+	throw "java install: Adoptium publishes no build of $Version for windows/$architecture"
 }
+# java -version reports the release's own version: 27 for jdk-27+35,
+# 27.0.1.0.2 for jdk-27.0.1.0.2+1, and 1.8.0_<security> for Java 8.
 if ($release -match '^jdk8u(\d+)-b\d+$') {
-	# Java 8 reports 1.8.0_<security>.
 	$expectedVersion = "1.8.0_$($Matches[1])"
-} elseif ($release -match '^jdk-\d+(\.\d+)*\+') {
-	$expectedVersion = $env:APP_VERSION
+} elseif ($release -match '^jdk-(\d+(\.\d+)*)\+') {
+	$expectedVersion = $Matches[1]
 } else {
 	throw "java install: unexpected release name from Adoptium: $release"
 }
@@ -42,7 +77,7 @@ if ($release -match '^jdk8u(\d+)-b\d+$') {
 $binaryUrl = "$api/binary/version/$release/windows/$architecture/jdk/hotspot/normal/eclipse?project=jdk"
 $checksumUrl = "$api/checksum/version/$release/windows/$architecture/jdk/hotspot/normal/eclipse?project=jdk"
 $root = Join-Path $env:ProgramFiles 'java'
-$prefix = Join-Path $root $env:APP_VERSION
+$prefix = Join-Path $root $Version
 $current = Join-Path $root 'current'
 $pathEntry = Join-Path $current 'bin'
 $work = Join-Path ([System.IO.Path]::GetTempPath()) "java-$([guid]::NewGuid())"
@@ -51,8 +86,11 @@ try {
 	New-Item -ItemType Directory -Path $work -Force | Out-Null
 	$archive = Join-Path $work 'jdk.zip'
 	Invoke-WebRequest -UseBasicParsing -Uri $binaryUrl -OutFile $archive
-	$checksumResponse = Invoke-WebRequest -UseBasicParsing -Uri $checksumUrl
-	$expected = (($checksumResponse.Content.Trim() -split '\s+')[0]).ToLowerInvariant()
+	# Saved to a file: Windows PowerShell returns this response's content as bytes.
+	$checksumFile = Join-Path $work 'jdk.zip.sha256.txt'
+	Invoke-WebRequest -UseBasicParsing -Uri $checksumUrl -OutFile $checksumFile
+	$checksumText = [System.IO.File]::ReadAllText($checksumFile).Trim()
+	$expected = (($checksumText -split '\s+')[0]).ToLowerInvariant()
 	if ($expected -notmatch '^[0-9a-f]{64}$') {
 		throw "java install: Adoptium did not publish a checksum for $release"
 	}
@@ -106,7 +144,7 @@ try {
 	}
 	if ($versionExitCode -ne 0 -or
 		$versionOutput -notmatch "`"$([regex]::Escape($expectedVersion))`"") {
-		throw "java install: installed version does not match $env:APP_VERSION`: $versionOutput"
+		throw "java install: installed version does not match $Version`: $versionOutput"
 	}
 	Write-Host $versionOutput.Trim()
 } finally {

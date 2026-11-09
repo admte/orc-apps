@@ -1,19 +1,60 @@
+<#
+.SYNOPSIS
+Marks this machine's Jenkins agent temporarily offline and waits until it is idle.
+
+.DESCRIPTION
+The controller hands the agent no new build once it is offline. Stopping the agent
+itself is left to the caller.
+
+.PARAMETER Url
+Jenkins controller URL.
+
+.PARAMETER Username
+Jenkins user the agent connects as.
+
+.PARAMETER TlsCaFile
+File holding extra CA certificates (PEM) to verify the controller with; without it,
+the copy start staged.
+
+.PARAMETER StopReason
+Why the agent is stopping, shown as its offline message. Default: stop.
+
+.PARAMETER AgentDir
+The agent's own directory. Default: C:\ProgramData\jenkins-agent.
+
+.PARAMETER IdleTimeout
+Seconds to wait for the build. Default: 1740.
+
+.PARAMETER PollInterval
+Seconds between asking whether the agent is idle. Default: 10.
+#>
+[CmdletBinding()]
+param(
+	[string]$Url = '',
+	[string]$Username = '',
+	[string]$TlsCaFile = '',
+	[string]$StopReason = 'stop',
+	[string]$AgentDir = 'C:\ProgramData\jenkins-agent',
+	# Just under half an hour, so a stop that is given half an hour ends with a
+	# message of its own rather than being cut off mid-poll.
+	[int]$IdleTimeout = 1740,
+	[int]$PollInterval = 10
+)
+
 $ErrorActionPreference = 'Stop'
 
-# Quiesce hook: the Swarm client is still running and still holds whatever build the
-# controller gave it. Mark the node temporarily offline so the queue stops handing it
-# work, wait until it reports idle, then exit 0 — stopping the service is the
-# runtime's next step, never this script's.
+# Runs before the service is stopped: the Swarm client is still running and still
+# holds whatever build the controller gave it. Mark the node temporarily offline so
+# the queue stops handing it work, wait until it reports idle, then exit 0 —
+# stopping the service comes after, and is never this script's job.
 
-$agentDir = if ($env:AGENT_DIR) { $env:AGENT_DIR } else { 'C:\ProgramData\jenkins-agent' }
-$passwordFile = Join-Path $agentDir 'jenkins.password'
-# The copy start-jenkins-agent.ps1 staged for the running agent; the fallback for a
-# stop that was handed no tls_ca of its own.
-$stagedCaPath = Join-Path $agentDir 'platform-ca.pem'
-# Kept under the 30m stop.timeout so the wait ends with a message of its own rather
-# than being cut off mid-poll.
-$idleTimeout = if ($env:IDLE_TIMEOUT) { [int]$env:IDLE_TIMEOUT } else { 1740 }
-$pollInterval = if ($env:POLL_INTERVAL) { [int]$env:POLL_INTERVAL } else { 10 }
+if (-not $Url) { throw 'jenkins-agent stop: -Url is required' }
+if (-not $Username) { throw 'jenkins-agent stop: -Username is required' }
+
+$passwordFile = Join-Path $AgentDir 'jenkins.password'
+# The copy start-jenkins-agent.ps1 staged for the running agent; the fallback when
+# no -TlsCaFile is given to this stop.
+$stagedCaPath = Join-Path $AgentDir 'platform-ca.pem'
 
 $script:jenkinsBase = ''
 $script:jenkinsAuth = ''
@@ -130,7 +171,7 @@ function Get-PemCertificates($path) {
 	return , $certs
 }
 
-# Adds the platform chain to what this process trusts, for the duration of this
+# Adds the supplied CA chain to what this process trusts, for the duration of this
 # process only. The runner's twin, and held to the same rule: strictly additive, and
 # never a bypass. A certificate is accepted only when the OS already validated it, or
 # when the chain rebuilds cleanly and terminates at one of the supplied anchors; a
@@ -138,7 +179,7 @@ function Get-PemCertificates($path) {
 function Set-PlatformCaTrust($caPath) {
 	$anchors = Get-PemCertificates $caPath
 	if ($anchors.Count -eq 0) {
-		throw "jenkins-agent stop: no certificate in the platform CA bundle: $caPath"
+		throw "jenkins-agent stop: no certificate in the CA bundle: $caPath"
 	}
 	$thumbprints = @{}
 	foreach ($anchor in $anchors) { $thumbprints[$anchor.Thumbprint] = $true }
@@ -175,11 +216,8 @@ function Set-PlatformCaTrust($caPath) {
 	}.GetNewClosure()
 }
 
-if (-not $env:JENKINS_URL) { throw 'jenkins-agent stop: JENKINS_URL is required' }
-if (-not $env:JENKINS_USERNAME) { throw 'jenkins-agent stop: JENKINS_USERNAME is required' }
-
 if (-not (Test-Path -LiteralPath $passwordFile -PathType Leaf)) {
-	Write-Host "jenkins-agent stop: no install found; nothing to quiesce dir=$agentDir"
+	Write-Host "jenkins-agent stop: no install found; nothing to quiesce dir=$AgentDir"
 	exit 0
 }
 $jenkinsPassword = ([System.IO.File]::ReadAllText($passwordFile)).Trim([char[]]"`r`n")
@@ -189,29 +227,27 @@ if (-not $jenkinsPassword) { throw "jenkins-agent stop: password file is empty: 
 $node = $env:COMPUTERNAME
 if (-not $node) { throw 'jenkins-agent stop: host name is empty' }
 
-# The controller this hook talks to is the one the running agent is connected to, so
-# it verifies against the same chain. TLS_CA_FILE is the runtime's materialization
-# of the param for this phase; the copy start staged is the fallback, which is what
-# answers when the param resolved for start but not for this stop. Neither present
-# means the OS trust store, unchanged.
+# The controller this script talks to is the one the running agent is connected to,
+# so it verifies against the same chain: -TlsCaFile when it is given, else the copy
+# start staged, which is what answers when a CA bundle was given to start but not
+# to this stop. Neither present means the OS trust store, unchanged.
 $trustSource = ''
-if ($env:TLS_CA_FILE -and (Test-Path -LiteralPath $env:TLS_CA_FILE -PathType Leaf) -and
-	(Get-Item -LiteralPath $env:TLS_CA_FILE).Length -gt 0) {
-	$trustSource = $env:TLS_CA_FILE
+if ($TlsCaFile -and (Test-Path -LiteralPath $TlsCaFile -PathType Leaf) -and
+	(Get-Item -LiteralPath $TlsCaFile).Length -gt 0) {
+	$trustSource = $TlsCaFile
 } elseif ((Test-Path -LiteralPath $stagedCaPath -PathType Leaf) -and
 	(Get-Item -LiteralPath $stagedCaPath).Length -gt 0) {
 	$trustSource = $stagedCaPath
 }
 if ($trustSource) {
 	Set-PlatformCaTrust $trustSource
-	Write-Host "jenkins-agent stop: verifying the controller against the platform CA source=$trustSource"
+	Write-Host "jenkins-agent stop: verifying the controller against the supplied CA source=$trustSource"
 }
 
-Open-JenkinsSession $env:JENKINS_URL $env:JENKINS_USERNAME $jenkinsPassword
+Open-JenkinsSession $Url $Username $jenkinsPassword
 $jenkinsPassword = $null
 $computer = "/computer/$node"
-$reason = if ($env:APP_STOP_REASON) { $env:APP_STOP_REASON } else { 'stop' }
-$offlineMessage = [System.Uri]::EscapeDataString("ORC8R node $reason")
+$offlineMessage = [System.Uri]::EscapeDataString("jenkins-agent $StopReason")
 
 function Set-AgentOffline($computer, $offlineMessage) {
 	Update-JenkinsCrumb
@@ -252,7 +288,7 @@ if ($status.Body.temporarilyOffline) {
 	}
 }
 
-Write-Host "jenkins-agent stop: waiting for the current build to finish node=$node timeout=${idleTimeout}s"
+Write-Host "jenkins-agent stop: waiting for the current build to finish node=$node timeout=${IdleTimeout}s"
 $waited = 0
 while ($true) {
 	$status = Invoke-JenkinsGet "$computer/api/json?tree=idle"
@@ -271,9 +307,9 @@ while ($true) {
 			Write-Host "jenkins-agent stop: controller did not answer; retrying node=$node http_status=$($status.Status) waited=${waited}s"
 		}
 	}
-	if ($waited -ge $idleTimeout) { break }
-	Start-Sleep -Seconds $pollInterval
-	$waited += $pollInterval
+	if ($waited -ge $IdleTimeout) { break }
+	Start-Sleep -Seconds $PollInterval
+	$waited += $PollInterval
 }
 
-throw "jenkins-agent stop: agent was still busy after ${idleTimeout}s node=$node"
+throw "jenkins-agent stop: agent was still busy after ${IdleTimeout}s node=$node"

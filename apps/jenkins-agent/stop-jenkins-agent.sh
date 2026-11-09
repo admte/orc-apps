@@ -1,29 +1,86 @@
 #!/bin/sh
 set -eu
 
-# Quiesce hook: the Swarm client is still running and still holds whatever build
-# the controller gave it. Mark the node temporarily offline so the queue stops
-# handing it work, wait until it reports idle, then exit 0 — stopping the service
-# is the runtime's next step, never this script's.
+# Runs before the service is stopped: the Swarm client is still running and still
+# holds whatever build the controller gave it. Mark the node temporarily offline so
+# the queue stops handing it work, wait until it reports idle, then exit 0 —
+# stopping the service comes after, and is never this script's job.
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-AGENT_DIR=${AGENT_DIR:-/var/lib/jenkins-agent}
-PASSWORD_FILE="$AGENT_DIR/jenkins.password"
-# The copy start-jenkins-agent.sh staged for the running agent; the fallback for a
-# stop that was handed no tls_ca of its own.
-STAGED_CA_PATH="$AGENT_DIR/platform-ca.pem"
-# Kept under the 30m stop.timeout so the wait ends with a message of its own
-# rather than being cut off mid-poll.
-IDLE_TIMEOUT=${IDLE_TIMEOUT:-1740}
-POLL_INTERVAL=${POLL_INTERVAL:-10}
-
 # shellcheck source=jenkins-agent-common.sh
 . "$SCRIPT_DIR/jenkins-agent-common.sh"
+
+usage() {
+	cat <<USAGE
+Usage: stop-jenkins-agent.sh --url=URL --username=NAME [--tls-ca-file=PATH]
+                             [--stop-reason=REASON] [--agent-dir=DIR]
+                             [--idle-timeout=SECONDS] [--poll-interval=SECONDS]
+
+Marks this machine's Jenkins agent temporarily offline, so the controller hands
+it no new build, and waits until it is idle. Stopping the agent itself is left
+to the caller.
+
+  --url=URL                Jenkins controller URL
+  --username=NAME          Jenkins user the agent connects as
+  --tls-ca-file=PATH       file holding extra CA certificates (PEM) to verify the
+                           controller with; without it, the copy start staged
+  --stop-reason=REASON     why the agent is stopping, shown as its offline
+                           message (default: stop)
+  --agent-dir=DIR          the agent's own directory
+                           (default: $JENKINS_AGENT_DIR_DEFAULT)
+  --idle-timeout=SECONDS   how long to wait for the build (default: 1740)
+  --poll-interval=SECONDS  how often to ask whether it is idle (default: 10)
+  --help                   show this help
+USAGE
+}
 
 fail() {
 	echo "jenkins-agent stop: $*" >&2
 	exit 1
 }
+
+usage_error() {
+	echo "jenkins-agent stop: $*" >&2
+	usage >&2
+	exit 2
+}
+
+jenkins_url=
+jenkins_username=
+tls_ca_file=
+stop_reason=
+agent_dir=$JENKINS_AGENT_DIR_DEFAULT
+# Just under half an hour, so a stop that is given half an hour ends with a message
+# of its own rather than being cut off mid-poll.
+idle_timeout=1740
+poll_interval=10
+for arg; do
+	case $arg in
+	--url=*) jenkins_url=${arg#--url=} ;;
+	--username=*) jenkins_username=${arg#--username=} ;;
+	--tls-ca-file=*) tls_ca_file=${arg#--tls-ca-file=} ;;
+	--stop-reason=*) stop_reason=${arg#--stop-reason=} ;;
+	--agent-dir=*) agent_dir=${arg#--agent-dir=} ;;
+	--idle-timeout=*) idle_timeout=${arg#--idle-timeout=} ;;
+	--poll-interval=*) poll_interval=${arg#--poll-interval=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+[ -n "$jenkins_url" ] || usage_error "--url is required"
+[ -n "$jenkins_username" ] || usage_error "--username is required"
+[ -n "$agent_dir" ] || usage_error "--agent-dir must not be empty"
+case $idle_timeout in
+'' | *[!0-9]*) usage_error "--idle-timeout must be a number of seconds" ;;
+esac
+case $poll_interval in
+'' | *[!0-9]*) usage_error "--poll-interval must be a number of seconds" ;;
+esac
+
+PASSWORD_FILE="$agent_dir/jenkins.password"
+# The copy start-jenkins-agent.sh staged for the running agent; the fallback when
+# no --tls-ca-file is given to this stop.
+STAGED_CA_PATH="$agent_dir/platform-ca.pem"
 
 note() {
 	echo "jenkins-agent stop: $*" >&2
@@ -37,11 +94,8 @@ need curl
 need hostname
 need python3
 
-[ -n "${JENKINS_URL:-}" ] || fail "JENKINS_URL is required"
-[ -n "${JENKINS_USERNAME:-}" ] || fail "JENKINS_USERNAME is required"
-
 if [ ! -r "$PASSWORD_FILE" ]; then
-	note "no install found; nothing to quiesce dir=$AGENT_DIR"
+	note "no install found; nothing to quiesce dir=$agent_dir"
 	exit 0
 fi
 jenkins_password=$(tr -d '\r\n' <"$PASSWORD_FILE")
@@ -51,14 +105,13 @@ jenkins_password=$(tr -d '\r\n' <"$PASSWORD_FILE")
 node=$(hostname)
 [ -n "$node" ] || fail "hostname is empty"
 
-# The controller this hook talks to is the one the running agent is connected to, so
-# it verifies against the same chain. TLS_CA_FILE is the runtime's materialization
-# of the param for this phase; the copy start staged is the fallback, which is what
-# answers when the param resolved for start but not for this stop. Neither present
-# means the OS trust store, unchanged.
+# The controller this script talks to is the one the running agent is connected to,
+# so it verifies against the same chain: --tls-ca-file when it is given, else the
+# copy start staged, which is what answers when a CA bundle was given to start but
+# not to this stop. Neither present means the OS trust store, unchanged.
 trust_source=""
-if [ -n "${TLS_CA_FILE:-}" ] && [ -s "$TLS_CA_FILE" ]; then
-	trust_source=$TLS_CA_FILE
+if [ -n "$tls_ca_file" ] && [ -s "$tls_ca_file" ]; then
+	trust_source=$tls_ca_file
 elif [ -s "$STAGED_CA_PATH" ]; then
 	trust_source=$STAGED_CA_PATH
 fi
@@ -66,14 +119,14 @@ if [ -n "$trust_source" ]; then
 	trust_dir=$(mktemp -d)
 	trap 'rm -rf "$trust_dir"' EXIT INT TERM
 	jenkins_trust_init "$trust_source" "$trust_dir/ca-trust.pem"
-	note "verifying the controller against the platform CA source=$trust_source"
+	note "verifying the controller against the supplied CA source=$trust_source"
 fi
 
-jenkins_session_open "$JENKINS_URL" "$JENKINS_USERNAME" "$jenkins_password"
+jenkins_session_open "$jenkins_url" "$jenkins_username" "$jenkins_password"
 computer="/computer/$node"
 body="$jenkins_session_dir/body"
 offline_message=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' \
-	"ORC8R node ${APP_STOP_REASON:-stop}")
+	"jenkins-agent ${stop_reason:-stop}")
 
 mark_offline() {
 	jenkins_fetch_crumb optional
@@ -111,7 +164,7 @@ else
 	}
 fi
 
-note "waiting for the current build to finish node=$node timeout=${IDLE_TIMEOUT}s"
+note "waiting for the current build to finish node=$node timeout=${idle_timeout}s"
 waited=0
 while :; do
 	status=$(jenkins_fetch "$computer/api/json?tree=idle" "$body")
@@ -132,10 +185,10 @@ while :; do
 		note "controller did not answer; retrying node=$node http_status=$status waited=${waited}s"
 		;;
 	esac
-	[ "$waited" -lt "$IDLE_TIMEOUT" ] || break
-	sleep "$POLL_INTERVAL"
-	waited=$((waited + POLL_INTERVAL))
+	[ "$waited" -lt "$idle_timeout" ] || break
+	sleep "$poll_interval"
+	waited=$((waited + poll_interval))
 done
 
 jenkins_session_close
-fail "agent was still busy after ${IDLE_TIMEOUT}s node=$node"
+fail "agent was still busy after ${idle_timeout}s node=$node"

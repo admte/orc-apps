@@ -1,67 +1,118 @@
 #!/bin/sh
 set -eu
 
-# Start phase: the packaged script that replaced the inline `start.command`, so each
-# platform resolves its own start. A start command that resolves — from config or, as
-# here, from a packaged script — together with `start.service: jenkins-agent` is what
-# selects runtime-managed service mode, so the node still writes the service
-# definition itself and this package ships no unit file and enables nothing for boot.
+# Runs the Swarm client in the foreground, for a service manager to supervise: this
+# script is meant to be a service's main process. The package ships no unit file and
+# enables nothing for boot.
 #
 # setpriv (never su or runuser) drops to the jenkins account inside the same session,
 # so the Swarm client stays the service's own process and the stop signal reaches it.
 # Every step execs: this script becomes setpriv, which becomes the runner, which
 # becomes the JVM, so the service's main pid is the JVM itself.
 
-AGENT_DIR=${AGENT_DIR:-/var/lib/jenkins-agent}
-SERVICE_USER=${SERVICE_USER:-jenkins}
-RUNNER_DIR=${RUNNER_DIR:-/etc/jenkins-agent}
-RUNNER_PATH="$RUNNER_DIR/jenkins-agent.sh"
-# Where the platform chain is staged for the runner. See stage_tls_ca.
-CA_PATH="$AGENT_DIR/platform-ca.pem"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=jenkins-agent-common.sh
+. "$SCRIPT_DIR/jenkins-agent-common.sh"
+
+usage() {
+	cat <<USAGE
+Usage: start-jenkins-agent.sh --url=URL --username=NAME [--labels=LIST]
+                              [--tls-ca-file=PATH] [--agent-dir=DIR]
+                              [--service-user=NAME] [--runner-dir=DIR]
+
+Runs the Jenkins Swarm client in the foreground as the agent's account, named
+after this machine. Run as root, after install.
+
+  --url=URL            Jenkins controller URL
+  --username=NAME      Jenkins user the agent connects as
+  --labels=LIST        space-separated labels for the agent
+  --tls-ca-file=PATH   file holding extra CA certificates (PEM) to verify the
+                       controller with, trusted alongside the system CAs
+  --agent-dir=DIR      the agent's own directory
+                       (default: $JENKINS_AGENT_DIR_DEFAULT)
+  --service-user=NAME  account the agent runs as (default: $JENKINS_SERVICE_USER_DEFAULT)
+  --runner-dir=DIR     where install copied the runner
+                       (default: $JENKINS_RUNNER_DIR_DEFAULT)
+  --help               show this help
+USAGE
+}
 
 fail() {
 	echo "jenkins-agent start: $*" >&2
 	exit 1
 }
 
-# Copies the platform's trust chain somewhere the jenkins account can read.
+usage_error() {
+	echo "jenkins-agent start: $*" >&2
+	usage >&2
+	exit 2
+}
+
+jenkins_url=
+jenkins_username=
+labels=
+tls_ca_file=
+agent_dir=$JENKINS_AGENT_DIR_DEFAULT
+service_user=$JENKINS_SERVICE_USER_DEFAULT
+runner_dir=$JENKINS_RUNNER_DIR_DEFAULT
+for arg; do
+	case $arg in
+	--url=*) jenkins_url=${arg#--url=} ;;
+	--username=*) jenkins_username=${arg#--username=} ;;
+	--labels=*) labels=${arg#--labels=} ;;
+	--tls-ca-file=*) tls_ca_file=${arg#--tls-ca-file=} ;;
+	--agent-dir=*) agent_dir=${arg#--agent-dir=} ;;
+	--service-user=*) service_user=${arg#--service-user=} ;;
+	--runner-dir=*) runner_dir=${arg#--runner-dir=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+[ -n "$jenkins_url" ] || usage_error "--url is required"
+[ -n "$jenkins_username" ] || usage_error "--username is required"
+[ -n "$agent_dir" ] || usage_error "--agent-dir must not be empty"
+[ -n "$service_user" ] || usage_error "--service-user must not be empty"
+[ -n "$runner_dir" ] || usage_error "--runner-dir must not be empty"
+
+RUNNER_PATH="$runner_dir/jenkins-agent.sh"
+# Where the supplied CA chain is staged for the runner. See stage_tls_ca.
+CA_PATH="$agent_dir/platform-ca.pem"
+
+# Copies the CA chain in --tls-ca-file somewhere the jenkins account can read.
 #
-# TLS_CA_FILE is the runtime's own materialization of the `tls_ca` param: it
-# lives in a 0700 directory owned by the account the runtime runs as, and it is
-# withdrawn when the app stops. This script still runs as that account, so it stages
+# That file may be readable only by the account that runs this script, and may be
+# gone once the start is over. This script still runs as that account, so it stages
 # a readable copy before setpriv hands the rest of the start to jenkins.
 #
-# Copied on every start, never at install: the platform's certificates are
-# short-lived and renewed by restarting the app, and install is also the phase a pool
-# bake snapshots — a chain baked into an image would be stale on first boot. When
-# nothing is supplied the stale copy is removed, so a controller that moved to a
-# publicly issued certificate is not left verifying against yesterday's chain.
+# Copied on every start, never at install: a private CA's certificates may be
+# short-lived and renewed by restarting the service, and a chain copied at install
+# would go stale. When nothing is supplied the stale copy is removed, so a
+# controller that moved to a publicly issued certificate is not left verifying
+# against yesterday's chain.
 stage_tls_ca() {
-	if [ -n "${TLS_CA_FILE:-}" ] && [ -s "$TLS_CA_FILE" ]; then
-		cat "$TLS_CA_FILE" >"$CA_PATH" || fail "failed to stage the CA bundle path=$CA_PATH"
+	if [ -n "$tls_ca_file" ] && [ -s "$tls_ca_file" ]; then
+		cat "$tls_ca_file" >"$CA_PATH" || fail "failed to stage the CA bundle path=$CA_PATH"
 		chmod 0644 "$CA_PATH"
-		chown "$SERVICE_USER:$SERVICE_USER" "$CA_PATH" 2>/dev/null || true
-		echo "jenkins-agent start: staged the platform CA bundle path=$CA_PATH" >&2
+		chown "$service_user:$service_user" "$CA_PATH" 2>/dev/null || true
+		echo "jenkins-agent start: staged the supplied CA bundle path=$CA_PATH" >&2
 		return 0
 	fi
 	rm -f "$CA_PATH"
-	echo "jenkins-agent start: no platform CA supplied; using the OS trust store" >&2
+	echo "jenkins-agent start: no CA bundle supplied; using the OS trust store" >&2
 }
 
 [ -x "$RUNNER_PATH" ] || fail "no install found; install must run first path=$RUNNER_PATH"
-[ -n "${JENKINS_URL:-}" ] || fail "JENKINS_URL is required"
-[ -n "${JENKINS_USERNAME:-}" ] || fail "JENKINS_USERNAME is required"
 
 stage_tls_ca
 
 # The account has no home directory, so HOME points at the agent directory it owns.
 # -disableClientsUniqueId makes the Swarm node name the host name, verbatim, which is
 # the name stop-jenkins-agent.sh looks up. The CA path is passed even when nothing was
-# staged: the runner treats a missing file as "no platform CA", which is the same
-# thing an unresolved param means.
-exec setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_USER" --init-groups \
-	env HOME="$AGENT_DIR" \
+# staged: the runner treats a missing file as "no CA bundle", the same as no
+# --tls-ca-file at all.
+exec setpriv --reuid="$service_user" --regid="$service_user" --init-groups \
+	env HOME="$agent_dir" \
 	"$RUNNER_PATH" \
-	"$JENKINS_URL" "$JENKINS_USERNAME" "$AGENT_DIR/jenkins.password" \
-	"$(hostname)" "${LABELS:-}" "$AGENT_DIR" \
-	"$AGENT_DIR/logging.properties" "$CA_PATH"
+	"$jenkins_url" "$jenkins_username" "$agent_dir/jenkins.password" \
+	"$(hostname)" "$labels" "$agent_dir" \
+	"$agent_dir/logging.properties" "$CA_PATH"

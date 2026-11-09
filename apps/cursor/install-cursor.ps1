@@ -1,7 +1,24 @@
+<#
+.SYNOPSIS
+Installs the Cursor CLI with Cursor's official installer.
+
+.DESCRIPTION
+Leaves an agent command that is already on PATH as it is.
+
+.PARAMETER Force
+Install even when agent is already on PATH.
+#>
+[CmdletBinding()]
+param(
+	[switch]$Force
+)
+
 $ErrorActionPreference = 'Stop'
+# Progress rendering slows downloads many times over.
+$ProgressPreference = 'SilentlyContinue'
 
 $existing = Get-Command agent -ErrorAction SilentlyContinue
-if ($existing -and -not $env:CURSOR_FORCE_INSTALL) {
+if ($existing -and -not $Force) {
 	& $existing.Source --version
 	if ($LASTEXITCODE -ne 0) {
 		throw "cursor install: existing CLI failed with exit code $LASTEXITCODE"
@@ -31,7 +48,11 @@ try {
 	if ($command) {
 		$agent = $command.Source
 	} else {
+		# The official installer puts the CLI under LOCALAPPDATA and adds it only to
+		# the user's PATH, which a process started before the install does not see.
 		$candidates = @(
+			(Join-Path $env:LOCALAPPDATA 'cursor-agent\agent.exe'),
+			(Join-Path $env:LOCALAPPDATA 'cursor-agent\agent.cmd'),
 			(Join-Path $env:USERPROFILE '.local\bin\agent.exe'),
 			(Join-Path $env:USERPROFILE '.local\bin\agent.cmd')
 		)

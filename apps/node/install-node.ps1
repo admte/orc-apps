@@ -1,15 +1,35 @@
-$ErrorActionPreference = 'Stop'
+<#
+.SYNOPSIS
+Installs one Node.js release and puts it on the machine PATH.
 
-if (-not $env:APP_VERSION) {
-	throw 'node install: APP_VERSION is required'
-}
+.PARAMETER Version
+Node.js release, e.g. 20.17.0 (default: the newest release).
+#>
+[CmdletBinding()]
+param(
+	[string]$Version = ''
+)
+
+$ErrorActionPreference = 'Stop'
+# Progress rendering slows downloads and archive expansion many times over.
+$ProgressPreference = 'SilentlyContinue'
+
 if (-not $env:ProgramFiles) {
 	throw 'node install: ProgramFiles is required'
 }
 
-$version = $env:APP_VERSION.TrimStart('v')
+$requested = $Version
+if (-not $requested) {
+	# The release index lists the newest release first, prereleases included.
+	$index = Invoke-RestMethod -UseBasicParsing -Uri 'https://nodejs.org/dist/index.json'
+	$requested = @($index | Where-Object { $_.version -match '^v\d+\.\d+\.\d+$' })[0].version
+	if (-not $requested) {
+		throw 'node install: could not determine the newest Node.js release'
+	}
+}
+$version = $requested.TrimStart('v')
 if ($version -notmatch '^\d+\.\d+\.\d+$') {
-	throw "node install: invalid APP_VERSION: $env:APP_VERSION"
+	throw "node install: invalid version: $requested"
 }
 $architecture = switch ($env:PROCESSOR_ARCHITECTURE) {
 	'AMD64' { 'x64' }

@@ -1,14 +1,34 @@
+<#
+.SYNOPSIS
+Removes one JDK release that install-java.ps1 installed.
+
+.PARAMETER Version
+JDK release, e.g. 21.0.4 (default: the current release).
+#>
+[CmdletBinding()]
+param(
+	[string]$Version = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
-if (-not $env:APP_VERSION) {
-	throw 'java uninstall: APP_VERSION is required'
+if (-not $Version) {
+	# The install ran without a version and took the then-newest release, so the
+	# release the current junction points at is the one to remove.
+	$current = Join-Path (Join-Path $env:ProgramFiles 'java') 'current'
+	$item = Get-Item -LiteralPath $current -Force -ErrorAction SilentlyContinue
+	if (-not $item -or -not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+		Write-Host 'java uninstall: no installed release to remove'
+		exit 0
+	}
+	$Version = Split-Path -Leaf ([string]$item.Target).TrimEnd('\')
 }
-if ($env:APP_VERSION -notmatch '^\d+\.\d+\.\d+$') {
-	throw "java uninstall: invalid APP_VERSION: $env:APP_VERSION"
+if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+	throw "java uninstall: invalid version: $Version"
 }
 
 $root = Join-Path $env:ProgramFiles 'java'
-$prefix = Join-Path $root $env:APP_VERSION
+$prefix = Join-Path $root $Version
 $current = Join-Path $root 'current'
 $pathEntry = Join-Path $current 'bin'
 

@@ -1,4 +1,4 @@
-artifactType: application/vnd.orc8r.app.v1
+artifactType: application/vnd.orc8r.app.v2
 annotations:
   org.opencontainers.image.title: terraform
   # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
@@ -10,8 +10,13 @@ config:
     filter:
       prerelease: false
       latest_per: minor
-  install: {}
-  uninstall: {}
+  # Each release installs into its own directory and install points the
+  # terraform link at it. Without a version (the `default` tag) install takes the
+  # latest release, and uninstall removes the release the link points at.
+  install:
+    command: ["./install-terraform.sh", "--version=${version}"]
+  uninstall:
+    command: ["./uninstall-terraform.sh", "--version=${version}"]
 files:
   - install-terraform.sh
   - uninstall-terraform.sh

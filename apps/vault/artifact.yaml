@@ -1,4 +1,4 @@
-artifactType: application/vnd.orc8r.app.v1
+artifactType: application/vnd.orc8r.app.v2
 annotations:
   org.opencontainers.image.title: vault
   # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
@@ -32,10 +32,23 @@ config:
       prerelease: false
       pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
       limit: 30
+  # Without a version (the `default` tag) install takes the latest release, and
+  # leaves a vault command that is already on PATH as it is.
   install:
-    command: "{installCommand}"
+    command:
+      unix: ["./install-vault-unix.sh", "--version=${version}"]
+      windows: ["install-vault.ps1", "-Version:${version}"]
+  # Signs the CLI in with AppRole when a role ID is given. The script sets
+  # VAULT_ADDR from --addr itself, since the vault CLI reads the server address
+  # from it; the IDs reach the script only as the paths of their files.
   start:
-    command: "{startCommand}"
+    command:
+      unix: ["./start-vault-unix.sh", "--addr=${vault_addr}",
+             "--role-id-file=${vault_role_id_file}",
+             "--secret-id-file=${vault_secret_id_file}"]
+      windows: ["start-vault.ps1", "-Addr:${vault_addr}",
+                "-RoleIdFile:${vault_role_id_file}",
+                "-SecretIdFile:${vault_secret_id_file}"]
 files:
   - install-vault-unix.sh
   - install-vault.ps1
@@ -44,20 +57,11 @@ files:
 platforms:
   - os: linux
     arch: amd64
-    vars: &unix
-      installCommand: sh install-vault-unix.sh
-      startCommand: sh start-vault-unix.sh
   - os: linux
     arch: arm64
-    vars: *unix
   - os: darwin
     arch: amd64
-    vars: *unix
   - os: darwin
     arch: arm64
-    vars: *unix
   - os: windows
     arch: amd64
-    vars:
-      installCommand: powershell -NoProfile -ExecutionPolicy Bypass -File install-vault.ps1
-      startCommand: powershell -NoProfile -ExecutionPolicy Bypass -File start-vault.ps1

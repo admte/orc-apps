@@ -1,6 +1,34 @@
 #!/bin/sh
 set -eu
 
+usage() {
+	cat <<'USAGE'
+Usage: install-uv-unix.sh [--version=VERSION]
+
+Installs uv and uvx into /usr/local/bin. Without --version it runs Astral's
+installer for the latest release, and leaves a uv already in /usr/local/bin as
+it is. Needs root on Linux.
+
+  --version=VERSION  uv release to install, e.g. 0.4.20
+  --help             show this help
+USAGE
+}
+
+usage_error() {
+	echo "uv install: $*" >&2
+	usage >&2
+	exit 2
+}
+
+version=
+for arg; do
+	case $arg in
+	--version=*) version=${arg#--version=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+
 err_unsupported() {
 	echo "uv installation not supported on this platform: $*" >&2
 	exit 1
@@ -22,7 +50,7 @@ x86_64 | amd64 | aarch64 | arm64) ;;
 *) err_unsupported "architecture $(uname -m)" ;;
 esac
 
-if [ -z "${APP_VERSION:-}" ] && [ -x /usr/local/bin/uv ]; then
+if [ -z "$version" ] && [ -x /usr/local/bin/uv ]; then
 	/usr/local/bin/uv --version
 	exit 0
 fi
@@ -32,7 +60,7 @@ if ! command -v curl >/dev/null 2>&1; then
 	exit 1
 fi
 
-if [ -n "${APP_VERSION:-}" ]; then
+if [ -n "$version" ]; then
 	if ! command -v mktemp >/dev/null 2>&1; then
 		echo "mktemp is required to install uv" >&2
 		exit 1
@@ -47,12 +75,12 @@ if [ -n "${APP_VERSION:-}" ]; then
 	esac
 	target="${target_cpu}-${target_os}"
 	archive="uv-${target}.tar.gz"
-	base_url="https://github.com/astral-sh/uv/releases/download/$APP_VERSION"
+	base_url="https://github.com/astral-sh/uv/releases/download/$version"
 
 	tmp=$(mktemp -d)
 	trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-	echo "Downloading uv $APP_VERSION for $target" >&2
+	echo "Downloading uv $version for $target" >&2
 	curl -fLsS "$base_url/$archive" -o "$tmp/$archive"
 	curl -fLsS "$base_url/$archive.sha256" -o "$tmp/$archive.sha256"
 

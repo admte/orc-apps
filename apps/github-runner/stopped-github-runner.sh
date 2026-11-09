@@ -1,22 +1,79 @@
 #!/bin/sh
 set -eu
 
-# Post-exit hook: the listener is already gone, so GitHub will not refuse the
-# removal as busy. The registration is released on APP_STOP_REASON=terminate and
-# on nothing else — a restart or a plain stop leaves this node's runner in place,
-# because the same install starts again against the same registration.
+# Runs after the listener has exited, so GitHub will not refuse the removal as
+# busy. A registration made with a personal access token is released on stop
+# reason `terminate` and on nothing else — a restart or a plain stop leaves this
+# machine's runner in place, because the same install starts again against the
+# same registration. A JSON registration carries no credential that could remove
+# it, so only its identity files here are dropped.
 
-SERVICE_USER=${SERVICE_USER:-ghrunner}
-ATTEMPTS=${ATTEMPTS:-3}
-RETRY_INTERVAL=${RETRY_INTERVAL:-5}
+usage() {
+	cat <<'USAGE'
+Usage: stopped-github-runner.sh [--url=URL] [--token-file=PATH] [--stop-reason=REASON]
+                                [--service-user=NAME] [--attempts=N]
+                                [--retry-interval=SECONDS]
+
+Runs after the listener has exited. On --stop-reason=terminate it releases the
+runner registration (personal access token) or drops this machine's runner
+identity files (a JSON registration); on any other reason it keeps both.
+
+  --url=URL                 repository or organization URL (personal access token)
+  --token-file=PATH         file holding a personal access token or a runner
+                            registration as a JSON object
+  --stop-reason=REASON      why the runner stopped (default: exit)
+  --service-user=NAME       account that owns the runner (default: ghrunner)
+  --attempts=N              deregistration attempts (default: 3)
+  --retry-interval=SECONDS  pause between attempts (default: 5)
+  --help                    show this help
+USAGE
+}
 
 fail() {
 	echo "github-runner stopped: $*" >&2
 	exit 1
 }
 
-note() {
+usage_error() {
 	echo "github-runner stopped: $*" >&2
+	usage >&2
+	exit 2
+}
+
+repo_url=
+token_file=
+reason='exit'
+service_user=ghrunner
+attempts=3
+retry_interval=5
+for arg; do
+	case $arg in
+	--url=*) repo_url=${arg#--url=} ;;
+	--token-file=*) token_file=${arg#--token-file=} ;;
+	--stop-reason=*) reason=${arg#--stop-reason=} ;;
+	--service-user=*) service_user=${arg#--service-user=} ;;
+	--attempts=*) attempts=${arg#--attempts=} ;;
+	--retry-interval=*) retry_interval=${arg#--retry-interval=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+[ -n "$reason" ] || reason='exit'
+[ -n "$service_user" ] || usage_error "--service-user must not be empty"
+case $attempts in
+'' | *[!0-9]* | 0) usage_error "--attempts must be a positive whole number" ;;
+esac
+case $retry_interval in
+'' | *[!0-9]*) usage_error "--retry-interval must be a whole number of seconds" ;;
+esac
+
+# Progress to stdout; warnings and errors to stderr.
+note() {
+	echo "github-runner stopped: $*"
+}
+
+warn() {
+	echo "github-runner stopped: warning: $*" >&2
 }
 
 need() {
@@ -24,22 +81,27 @@ need() {
 }
 
 token_value() {
-	if [ -n "${TOKEN_FILE:-}" ]; then
-		tr -d '\r\n' <"$TOKEN_FILE"
-	elif [ -n "${TOKEN:-}" ]; then
-		printf '%s' "$TOKEN"
-	else
-		fail "TOKEN_FILE or TOKEN is required"
-	fi
+	[ -n "$token_file" ] || fail "--token-file is required"
+	tr -d '\r\n' <"$token_file"
+}
+
+# The token file holds either a personal access token or a runner registration
+# supplied as a JSON object. They are told apart by shape: a value whose first
+# non-blank character is `{` is the JSON registration.
+is_minted() {
+	trimmed=${1#"${1%%[![:space:]]*}"}
+	case "$trimmed" in
+	'{'*) return 0 ;;
+	*) return 1 ;;
+	esac
 }
 
 github_api_path() {
-	url=${URL:-}
-	case "$url" in
+	case "$repo_url" in
 	https://github.com/*) ;;
-	*) fail "URL must start with https://github.com/" ;;
+	*) fail "--url must start with https://github.com/" ;;
 	esac
-	path=${url#https://github.com/}
+	path=${repo_url#https://github.com/}
 	path=${path%.git}
 	path=${path%/}
 	owner=${path%%/*}
@@ -59,15 +121,14 @@ json_field() {
 # config.sh refuses to run as root; drop to the account that owns the runner
 # directory, the same way install and start do. setpriv, never su or runuser.
 as_service_user() {
-	if [ "$(id -u)" -eq 0 ] && id "$SERVICE_USER" >/dev/null 2>&1; then
-		setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_USER" --init-groups \
+	if [ "$(id -u)" -eq 0 ] && id "$service_user" >/dev/null 2>&1; then
+		setpriv --reuid="$service_user" --regid="$service_user" --init-groups \
 			env HOME="$work_dir" "$@"
 	else
 		env HOME="$work_dir" "$@"
 	fi
 }
 
-reason=${APP_STOP_REASON:-exit}
 if [ "$reason" != terminate ]; then
 	note "keeping the runner registration reason=$reason"
 	exit 0
@@ -80,17 +141,35 @@ if [ ! -x "$work_dir/config.sh" ]; then
 fi
 work_dir=$(CDPATH= cd -- "$work_dir" && pwd)
 
+credential=$(token_value 2>/dev/null) || credential=
+if [ -z "$credential" ]; then
+	note "no credential available; nothing to deregister reason=$reason"
+	exit 0
+fi
+
+# A JSON registration comes with no credential that could remove the runner from
+# GitHub, so that is left to whoever holds one. The identity files go, so an
+# install that starts again registers fresh rather than running a removed
+# identity — what `config.sh remove` does on the PAT path.
+if is_minted "$credential"; then
+	note "JSON registration; no credential here can remove it, nothing to deregister here reason=$reason"
+	rm -f "$work_dir/.runner" "$work_dir/.credentials" "$work_dir/.credentials_rsaparams"
+	note "removed this machine's runner identity files dir=$work_dir"
+	exit 0
+fi
+
 need curl
 need python3
-[ -n "${URL:-}" ] || fail "URL is required"
-github_token=$(token_value)
+[ -n "$repo_url" ] || fail "--url is required"
+github_token=$credential
 api_path=$(github_api_path)
 
 cd "$work_dir"
 attempt=1
 while :; do
-	note "deregistering the runner reason=$reason attempt=$attempt/$ATTEMPTS"
-	# A remove token is short-lived, so it is minted per attempt rather than reused.
+	note "deregistering the runner reason=$reason attempt=$attempt/$attempts"
+	# A remove token is short-lived, so it is requested per attempt rather than
+	# reused.
 	if remove_json=$(curl -fsSL -X POST \
 		-H "Accept: application/vnd.github+json" \
 		-H "Authorization: token $github_token" \
@@ -102,9 +181,10 @@ while :; do
 		exit 0
 	fi
 
-	if [ "$attempt" -ge "$ATTEMPTS" ]; then
-		fail "failed to deregister the runner after $ATTEMPTS attempts"
+	if [ "$attempt" -ge "$attempts" ]; then
+		fail "failed to deregister the runner after $attempts attempts"
 	fi
+	warn "deregistration attempt failed; retrying attempt=$attempt/$attempts"
 	attempt=$((attempt + 1))
-	sleep "$RETRY_INTERVAL"
+	sleep "$retry_interval"
 done

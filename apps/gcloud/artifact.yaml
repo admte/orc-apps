@@ -1,4 +1,4 @@
-artifactType: application/vnd.orc8r.app.v1
+artifactType: application/vnd.orc8r.app.v2
 annotations:
   org.opencontainers.image.title: gcloud
   # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
@@ -16,9 +16,15 @@ config:
         sensitive: true
         lifetime: startup
   install:
-    command: "{installCommand}"
+    command:
+      unix: ["./install-gcloud.sh"]
+      windows: ["install-gcloud.ps1"]
+  # Activates the service account when a key is given; the key reaches the
+  # script only as the path of its file.
   start:
-    command: "{startCommand}"
+    command:
+      unix: ["./start-gcloud.sh", "--service-account-key-file=${service_account_key_file}"]
+      windows: ["start-gcloud.ps1", "-ServiceAccountKeyFile:${service_account_key_file}"]
 files:
   - install-gcloud.sh
   - start-gcloud.sh
@@ -27,20 +33,11 @@ files:
 platforms:
   - os: linux
     arch: amd64
-    vars: &unix
-      installCommand: sh install-gcloud.sh
-      startCommand: sh start-gcloud.sh
   - os: linux
     arch: arm64
-    vars: *unix
   - os: darwin
     arch: amd64
-    vars: *unix
   - os: darwin
     arch: arm64
-    vars: *unix
   - os: windows
     arch: amd64
-    vars:
-      installCommand: powershell -NoProfile -ExecutionPolicy Bypass -File install-gcloud.ps1
-      startCommand: powershell -NoProfile -ExecutionPolicy Bypass -File start-gcloud.ps1

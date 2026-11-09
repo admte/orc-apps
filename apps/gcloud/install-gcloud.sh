@@ -1,10 +1,44 @@
 #!/bin/sh
 set -eu
 
+usage() {
+	cat <<'USAGE'
+Usage: install-gcloud.sh [--force] [--install-dir=DIR] [--bin-dir=DIR]
+
+Installs the latest Google Cloud CLI and links gcloud onto PATH. Leaves a gcloud
+command that is already on PATH as it is.
+
+  --force            install even when gcloud is already on PATH
+  --install-dir=DIR  where the SDK is unpacked (default: /usr/local/google-cloud-sdk)
+  --bin-dir=DIR      where gcloud is linked (default: /usr/local/bin)
+  --help             show this help
+USAGE
+}
+
 fail() {
 	echo "gcloud install: $*" >&2
 	exit 1
 }
+
+usage_error() {
+	echo "gcloud install: $*" >&2
+	usage >&2
+	exit 2
+}
+
+force=
+install_dir=/usr/local/google-cloud-sdk
+bin_dir=/usr/local/bin
+for arg; do
+	case $arg in
+	--force) force=1 ;;
+	--install-dir=*) install_dir=${arg#--install-dir=} ;;
+	--bin-dir=*) bin_dir=${arg#--bin-dir=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+[ -n "$bin_dir" ] || usage_error "--bin-dir must not be empty"
 
 need() {
 	command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
@@ -39,7 +73,7 @@ ensure_python() {
 	python_supported || fail "installed Python version is not supported; need 3.10-3.14"
 }
 
-if command -v gcloud >/dev/null 2>&1 && [ -z "${GCLOUD_CLI_FORCE_INSTALL:-}" ]; then
+if command -v gcloud >/dev/null 2>&1 && [ -z "$force" ]; then
 	gcloud version
 	exit 0
 fi
@@ -80,10 +114,8 @@ tar -xzf "$tmp/$archive" -C "$tmp"
 [ -x "$tmp/google-cloud-sdk/bin/gcloud" ] ||
 	fail "gcloud executable is missing from $archive"
 
-install_dir=${GCLOUD_INSTALL_DIR:-/usr/local/google-cloud-sdk}
-bin_dir=${GCLOUD_BIN_DIR:-/usr/local/bin}
 case "$install_dir" in
-"" | /) fail "unsafe GCLOUD_INSTALL_DIR: $install_dir" ;;
+"" | /) fail "unsafe --install-dir: $install_dir" ;;
 esac
 
 mkdir -p "$(dirname "$install_dir")" "$bin_dir"

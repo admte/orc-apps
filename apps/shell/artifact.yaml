@@ -1,47 +1,44 @@
-artifactType: application/vnd.orc8r.app.v1
+artifactType: application/vnd.orc8r.app.v2
 annotations:
   org.opencontainers.image.title: shell
-  # org.opencontainers.image.version: 1.0.1   # optional; omitted -> tag "default"
   org.opencontainers.image.description: Run an arbitrary shell command
 config:
   params:
     type: object
     required: []
     properties:
+      # A media type makes the command a file: it reaches start as ${cmd_file}, a path.
       cmd:
         type: string
-        description: "{cmdDescription}"
-        contentMediaType: "{cmdMediaType}"
+        title: Command
+        description:
+          unix: Command to execute (POSIX shell syntax)
+          windows: "Command to execute, run as a cmd.exe batch file (loops use %%i, not %i)"
+        placeholder: "echo 'hello world'"
+        contentMediaType: {unix: text/x-sh, windows: text/plain}
+      # No default: when unset, the command runs in the directory start runs in.
       dir:
         type: string
+        title: Working directory
         description: Working directory
-        default: ""
+  # Runs the command once, in the foreground, and ends with it.
   start:
-    command: "{startCommand}"
+    command:
+      unix: ["./start-shell.sh", "--dir=${dir}", "--cmd-file=${cmd_file}"]
+      windows: ["start-shell.ps1", "-CmdFile:${cmd_file}", "-Dir:${dir}"]
+files:
+  - start-shell.sh
+  - start-shell.ps1
 platforms:
-  # POSIX (sh) variant — linux + darwin, any arch. Shared vars via anchor.
   - os: linux
     arch: amd64
-    vars: &posix
-      cmdDescription: Command to execute (POSIX shell syntax)
-      cmdMediaType: text/x-sh
-      startCommand: 'cd "${DIR:-.}" && sh "${CMD_FILE:-/dev/null}"'
   - os: linux
     arch: arm64
-    vars: *posix
   - os: darwin
     arch: amd64
-    vars: *posix
   - os: darwin
     arch: arm64
-    vars: *posix
-  # Windows (powershell) variant.
   - os: windows
     arch: amd64
-    vars: &windows
-      cmdDescription: Command to execute (cmd.exe syntax)
-      cmdMediaType: text/plain
-      startCommand: 'powershell -NoProfile -ExecutionPolicy Bypass -Command "if ($env:DIR) { Set-Location -LiteralPath $env:DIR }; if ($env:CMD_FILE) { cmd.exe /c (Get-Content -Raw -LiteralPath $env:CMD_FILE) }"'
   - os: windows
     arch: arm64
-    vars: *windows

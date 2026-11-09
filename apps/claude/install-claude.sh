@@ -1,18 +1,52 @@
 #!/bin/sh
 set -eu
 
+usage() {
+	cat <<'USAGE'
+Usage: install-claude.sh [--version=VERSION] [--force] [--install-dir=DIR]
+
+Installs Claude Code. Without --version it installs the latest release, and
+leaves a claude command that is already on PATH as it is.
+
+  --version=VERSION  Claude Code release to install, e.g. 2.1.0
+  --force            install even when claude is already on PATH
+  --install-dir=DIR  where the claude command is installed (default: /usr/local/bin)
+  --help             show this help
+USAGE
+}
+
 fail() {
 	echo "claude install: $*" >&2
 	exit 1
 }
+
+usage_error() {
+	echo "claude install: $*" >&2
+	usage >&2
+	exit 2
+}
+
+requested=
+force=
+install_dir=/usr/local/bin
+for arg; do
+	case $arg in
+	--version=*) requested=${arg#--version=} ;;
+	--force) force=1 ;;
+	--install-dir=*) install_dir=${arg#--install-dir=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+[ -n "$install_dir" ] || usage_error "--install-dir must not be empty"
 
 need() {
 	command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
 }
 
 if command -v claude >/dev/null 2>&1 &&
-	[ -z "${APP_VERSION:-}" ] &&
-	[ -z "${CLAUDE_CODE_FORCE_INSTALL:-}" ]; then
+	[ -z "$requested" ] &&
+	[ -z "$force" ]; then
 	claude --version
 	exit 0
 fi
@@ -37,8 +71,8 @@ esac
 need curl
 need tar
 archive="claude-$os-$arch.tar.gz"
-if [ -n "${APP_VERSION:-}" ]; then
-	version=${APP_VERSION#v}
+if [ -n "$requested" ]; then
+	version=${requested#v}
 	base_url="https://github.com/anthropics/claude-code/releases/download/v$version"
 else
 	base_url="https://github.com/anthropics/claude-code/releases/latest/download"
@@ -64,7 +98,6 @@ fi
 tar -xzf "$tmp/$archive" -C "$tmp"
 [ -f "$tmp/claude" ] || fail "Claude Code binary is missing from $archive"
 
-install_dir=${CLAUDE_INSTALL_DIR:-/usr/local/bin}
 mkdir -p "$install_dir"
 install -m 0755 "$tmp/claude" "$install_dir/claude"
 "$install_dir/claude" --version

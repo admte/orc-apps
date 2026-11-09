@@ -1,12 +1,33 @@
+<#
+.SYNOPSIS
+Removes one Go release that install-go.ps1 installed.
+
+.PARAMETER Version
+Go release, e.g. 1.22.5 (default: the current release).
+#>
+[CmdletBinding()]
+param(
+	[string]$Version = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
-if (-not $env:APP_VERSION) {
-	throw 'go uninstall: APP_VERSION is required'
+if (-not $Version) {
+	# The install ran without a version and took the then-newest release, so the
+	# release the current junction points at is the one to remove.
+	$current = Join-Path (Join-Path $env:ProgramFiles 'go') 'current'
+	$item = Get-Item -LiteralPath $current -Force -ErrorAction SilentlyContinue
+	if (-not $item -or -not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+		Write-Host 'go uninstall: no installed release to remove'
+		exit 0
+	}
+	$Version = Split-Path -Leaf ([string]$item.Target).TrimEnd('\')
 }
 
-$version = $env:APP_VERSION -replace '^go', ''
+$requested = $Version
+$version = $requested -replace '^go', ''
 if ($version -notmatch '^\d+\.\d+(\.\d+)?$') {
-	throw "go uninstall: invalid APP_VERSION: $env:APP_VERSION"
+	throw "go uninstall: invalid version: $requested"
 }
 $root = Join-Path $env:ProgramFiles 'go'
 $prefix = Join-Path $root $version

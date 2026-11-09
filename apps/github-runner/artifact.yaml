@@ -1,7 +1,8 @@
-artifactType: application/vnd.orc8r.app.v1
+artifactType: application/vnd.orc8r.app.v2
 annotations:
   org.opencontainers.image.title: github-runner
-  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
+  # No version: install always downloads the latest runner, and an app's version is the
+  # version of the software it installs, never of its manifest or scripts.
   org.opencontainers.image.description: GitHub Actions self-hosted runner
 config:
   params:
@@ -14,42 +15,67 @@ config:
         title: Repository URL
         description: GitHub repository or organization URL to register the runner with
         placeholder: https://github.com/org/repo
+      # A personal access token, or a runner registration as a JSON object; the
+      # scripts tell them apart by shape. Sensitive, so it reaches a phase only as
+      # ${token_file}, a path. `runtime` because stop and stopped read it after
+      # start.
       token:
         type: string
-        title: GitHub Token
-        description: GitHub token used to request runner registration and removal tokens
+        title: GitHub token
+        description: GitHub token that can register runners for `url`
         sensitive: true
-      pool:
+        lifetime: runtime
+        x-source:
+          kind: github.runner
+          params:
+            url: url
+      labels:
         type: string
-        title: Runner label
-        description: Label applied to the runner; sourced from the pool name.
+        title: Runner labels
+        description: Comma-separated labels to register the runner with
         x-source:
           kind: pool.name
   # Downloads and unpacks the runner and nothing else. Registration is the start
-  # phase's, because a pool bake runs install alone and snapshots the disk: an
-  # identity minted here would be baked into a shared image along with the
-  # runner's `.credentials`.
-  install: {}
-  # Runtime-managed service: the node writes the service definition from this
-  # block, so the package never calls svc.sh install or config.cmd
-  # --runasservice. A service survives an agent upgrade or crash, which is what
-  # keeps a build running across one. No `command` here — the packaged
-  # start-github-runner.{sh,ps1} resolves per platform, and a start command that
-  # resolves (from config or from a packaged script) plus a `service` name is
-  # what selects runtime-managed service mode.
+  # phase's, so a disk imaged after install carries no runner identity and no
+  # `.credentials`. It takes no url and no token: the build is the latest public
+  # release whatever the runner registers with later.
+  install:
+    command:
+      unix: ["./install-github-runner.sh", "--os=${os}", "--arch=${arch}"]
+      windows: ["install-github-runner.ps1", "-Arch:${arch}"]
+  # Managed service: the service definition is generated from this block, so the
+  # package never calls svc.sh install or config.cmd --runasservice. The script
+  # registers, then execs the listener, so the stop signal reaches the runner
+  # itself.
   start:
     service: github-runner
+    command:
+      unix: ["./start-github-runner.sh", "--url=${url}", "--token-file=${token_file}",
+             "--labels=${labels}"]
+      windows: ["start-github-runner.ps1", "-Url:${url}", "-TokenFile:${token_file}",
+                "-Labels:${labels}"]
   # SIGINT is what the Actions listener reads as "finish this job, then exit", so
-  # it is the signal the generated service definition carries. stop-github-runner
-  # has already waited for the job by the time it is sent; the hour is the cap on
+  # it is the signal the generated service definition carries. The command has
+  # already waited for the job by the time it is sent; the hour is the cap on
   # that wait.
   stop:
     signal: SIGINT
     timeout: 1h
     grace: 30s
-  # Releases the GitHub registration, and only when the node is ending for good.
+    command:
+      unix: ["./stop-github-runner.sh", "--url=${url}", "--token-file=${token_file}",
+             "--labels=${labels}"]
+      windows: ["stop-github-runner.ps1", "-Url:${url}", "-TokenFile:${token_file}",
+                "-Labels:${labels}"]
+  # Only on stop reason `terminate`: removes a runner registered with a personal
+  # access token from GitHub. A restart or a plain stop keeps the registration.
   stopped:
     timeout: 120s
+    command:
+      unix: ["./stopped-github-runner.sh", "--url=${url}", "--token-file=${token_file}",
+             "--stop-reason=${stop_reason}"]
+      windows: ["stopped-github-runner.ps1", "-Url:${url}", "-TokenFile:${token_file}",
+                "-StopReason:${stop_reason}"]
 files:
   - install-github-runner.sh
   - start-github-runner.sh

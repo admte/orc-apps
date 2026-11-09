@@ -1,17 +1,41 @@
+<#
+.SYNOPSIS
+Installs Claude Code.
+
+.DESCRIPTION
+Without -Version it installs the latest release, and leaves a claude command that is
+already on PATH as it is.
+
+.PARAMETER Version
+Claude Code release to install, e.g. 2.1.0.
+
+.PARAMETER Force
+Install even when claude is already on PATH.
+
+.PARAMETER InstallDir
+Where claude.exe is installed (default: .local\bin under the user profile).
+#>
+[CmdletBinding()]
+param(
+	[string]$Version = '',
+	[switch]$Force,
+	[string]$InstallDir = ''
+)
+
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 # Windows 10 1809 and Server 2019 share build 17763, Claude Code's minimum.
 $os = Get-CimInstance -ClassName Win32_OperatingSystem
 if ([version]$os.Version -lt [version]'10.0.17763') {
-	throw "claude install: $($os.Caption) ($($os.Version)) is unsupported. Claude Code requires Windows Server 2019 or newer, or Windows 10 1809 or newer. Upgrade the pool's OS before retrying. See https://code.claude.com/docs/en/setup"
+	throw "claude install: $($os.Caption) ($($os.Version)) is unsupported. Claude Code requires Windows Server 2019 or newer, or Windows 10 1809 or newer. Upgrade Windows before retrying. See https://code.claude.com/docs/en/setup"
 }
 
 function Save-ClaudeDownload {
 	param([string]$Url, [string]$Path)
 
 	# Native curl avoids Windows PowerShell 5.1's legacy .NET TLS defaults.
-	# Skip revocation fetches that can fail on a fresh guest; certificate trust
+	# Skip revocation fetches that can fail on a fresh machine; certificate trust
 	# and hostname validation remain enabled, and the archive is checked below.
 	$curl = Join-Path $env:SystemRoot 'System32\curl.exe'
 	if (Test-Path -LiteralPath $curl -PathType Leaf) {
@@ -38,7 +62,7 @@ function Save-ClaudeDownload {
 }
 
 $existing = Get-Command claude -ErrorAction SilentlyContinue
-if ($existing -and -not $env:APP_VERSION -and -not $env:CLAUDE_CODE_FORCE_INSTALL) {
+if ($existing -and -not $Version -and -not $Force) {
 	& $existing.Source --version
 	if ($LASTEXITCODE -ne 0) {
 		throw "claude install: existing CLI failed with exit code $LASTEXITCODE"
@@ -52,14 +76,13 @@ $architecture = switch ($env:PROCESSOR_ARCHITECTURE) {
 	default { throw "claude install: unsupported architecture $env:PROCESSOR_ARCHITECTURE" }
 }
 $archive = "claude-win32-$architecture.zip"
-$baseUrl = if ($env:APP_VERSION) {
-	$version = $env:APP_VERSION.TrimStart('v')
-	"https://github.com/anthropics/claude-code/releases/download/v$version"
+$baseUrl = if ($Version) {
+	"https://github.com/anthropics/claude-code/releases/download/v$($Version.TrimStart('v'))"
 } else {
 	'https://github.com/anthropics/claude-code/releases/latest/download'
 }
-$installDir = if ($env:CLAUDE_INSTALL_DIR) {
-	$env:CLAUDE_INSTALL_DIR
+$installDir = if ($InstallDir) {
+	$InstallDir
 } else {
 	Join-Path $env:USERPROFILE '.local\bin'
 }

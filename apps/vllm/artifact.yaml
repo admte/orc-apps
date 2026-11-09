@@ -1,0 +1,85 @@
+artifactType: application/vnd.orc8r.app.v2
+annotations:
+  org.opencontainers.image.title: vllm
+  org.opencontainers.image.description: vLLM inference server, serving one model over an OpenAI-compatible API
+  org.opencontainers.image.source: https://github.com/vllm-project/vllm
+config:
+  params:
+    type: object
+    required: [model]
+    x-ui-order: [model, hf_token]
+    properties:
+      model:
+        type: string
+        title: Model
+        description: Hugging Face model to serve, or a path on the machine. Downloaded on first start, which takes as long as the weights are large.
+        placeholder: meta-llama/Llama-3.1-8B-Instruct
+      hf_token:
+        type: string
+        title: Hugging Face token
+        description: Needed only for a gated or private model. Created under Settings > Access Tokens with read access.
+        sensitive: true
+  # Two parameters, and nothing else to ask for. The port is the endpoint's own,
+  # the number of GPUs is the machine's, and the rest are vLLM's defaults. Adding a
+  # parameter later is free; removing one is not.
+  versions:
+    # github_releases, like terraform and gitlab-runner: the releases are tagged
+    # vX.Y.Z and the tag is exactly what `pip install vllm==` takes.
+    source: github_releases
+    url: https://github.com/vllm-project/vllm
+    filter:
+      pattern: '^v?(?P<version>\d+\.\d+\.\d+)$'
+      prerelease: false
+      # No latest_per. For a toolchain the minor is the release axis, so the
+      # toolchain apps keep the newest patch per minor; for a server it is the
+      # patches that carry the model support and the fixes, so the list is
+      # simply the thirty most recent releases.
+      limit: 30
+  endpoints:
+    api:
+      port: 8000
+      protocol: http
+      # The start command below passes this same number as --port: the two
+      # lines are the one place the port is set, and change together.
+      probe:
+        # vLLM's own deployment guide probes this path. Until the model is
+        # loaded there is no listener at all, so the probe fails on the dial —
+        # either way the probe passes only once the server can answer.
+        http: /health
+        interval: 15s
+        timeout: 5s
+      # Every instance holds its own copy of the same model and any of them can
+      # serve any request, so requests need not stick to one instance.
+      serve: spread
+  # The wheel and its CUDA payload are gigabytes. Each release installs into its
+  # own directory, so install, start and uninstall all name the version they act
+  # on.
+  install:
+    timeout: 3600s
+    command: ["./install-vllm.sh", "--version=${version}"]
+  # The token reaches the script only as the path of its file; --port is the
+  # endpoint's port above.
+  start:
+    service: vllm
+    restart: on-failure
+    command: ["./start-vllm.sh", "--version=${version}", "--model=${model}",
+              "--hf-token-file=${hf_token_file}", "--port=8000"]
+  # No stop command: requests here are seconds long, so there is nothing to drain.
+  # The signal is the default SIGTERM, which is what the server shuts down on;
+  # only the grace is declared, because unloading a large model off the GPUs
+  # takes longer than the default ten seconds.
+  stop:
+    grace: 60s
+  uninstall:
+    command: ["./uninstall-vllm.sh", "--version=${version}"]
+files:
+  - install-vllm.sh
+  - start-vllm.sh
+  - uninstall-vllm.sh
+platforms:
+  # vLLM publishes manylinux wheels for both x86-64 and aarch64 — the latter is
+  # what NVIDIA Grace Hopper systems run.
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64

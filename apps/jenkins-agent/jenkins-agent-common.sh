@@ -1,12 +1,21 @@
 #!/bin/sh
-# Shared Jenkins REST helpers for the jenkins-agent app.
+# Shared defaults and Jenkins REST helpers for the jenkins-agent app.
 #
-# Sourced, never executed. A session holds the basic-auth credentials, a cookie
-# jar, and the CSRF crumb the controller hands out; every request in a phase
-# reuses them, because Jenkins binds the crumb to the session that fetched it.
+# Sourced, never executed: install, start and stop source the copy beside them, and
+# the runner the copy install put beside it.
 #
-# Trust is a phase-wide setting rather than a session one: jenkins_trust_init builds
-# one PEM file out of the OS store and the platform chain, and every request made
+# The defaults are kept here and nowhere else, so every script agrees on where the
+# agent lives, the account it runs as, and where install puts the runner.
+JENKINS_AGENT_DIR_DEFAULT=/var/lib/jenkins-agent
+JENKINS_SERVICE_USER_DEFAULT=jenkins
+JENKINS_RUNNER_DIR_DEFAULT=/etc/jenkins-agent
+
+# A session holds the basic-auth credentials, a cookie
+# jar, and the CSRF crumb the controller hands out; every request in one script's
+# run reuses them, because Jenkins binds the crumb to the session that fetched it.
+#
+# Trust is a per-run setting rather than a per-session one: jenkins_trust_init builds
+# one PEM file out of the OS store and the supplied CA chain, and every request made
 # through here verifies against it.
 
 jenkins_session_dir=""
@@ -77,13 +86,13 @@ jenkins_system_ca_bundle() {
 }
 
 # Points every controller request at a trust file that is the OS trust store *plus*
-# the platform chain in $1, written to $2. Additive on purpose: the platform hands
-# this app its CA whether or not the controller is served with it, so replacing the
-# OS store would break a publicly trusted controller. With no chain to add, nothing
-# is written and curl keeps using the OS store on its own.
+# the CA chain in $1, written to $2. Additive on purpose: a CA chain may be supplied
+# whether or not the controller is served with it, so replacing the OS store would
+# break a publicly trusted controller. With no chain to add, nothing is written and
+# curl keeps using the OS store on its own.
 #
-# Re-run on every start, never cached: the platform's certificates are short-lived
-# and a renewal reaches the app as a restart.
+# Rebuilt on every start, never cached: the supplied certificates may be short-lived,
+# and a renewed chain takes effect at the next restart.
 jenkins_trust_init() {
 	JENKINS_CA_BUNDLE=""
 	if [ -z "${1:-}" ] || [ ! -s "$1" ]; then
@@ -94,9 +103,9 @@ jenkins_trust_init() {
 	if [ -n "$trust_system" ]; then
 		cat "$trust_system" >"$2"
 	else
-		# Not a downgrade: verification still happens, against the platform chain
+		# Not a downgrade: verification still happens, against the supplied chain
 		# alone. Only a controller with a publicly issued certificate would notice.
-		echo "jenkins-agent: no OS CA bundle found; trusting the platform chain only" >&2
+		echo "jenkins-agent: no OS CA bundle found; trusting the supplied CA chain only" >&2
 		: >"$2"
 	fi
 	printf '\n' >>"$2"

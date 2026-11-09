@@ -1,12 +1,46 @@
 #!/bin/sh
 set -eu
 
+usage() {
+	cat <<'USAGE'
+Usage: install-jfrog.sh [--version=VERSION] [--force] [--install-dir=DIR]
+
+Installs the JFrog CLI (jf). Without --version it installs the latest release,
+and leaves a jf command that is already on PATH as it is.
+
+  --version=VERSION  JFrog CLI release to install, e.g. 2.70.0
+  --force            install even when jf is already on PATH
+  --install-dir=DIR  where jf is installed (default: /usr/local/bin)
+  --help             show this help
+USAGE
+}
+
 fail() {
 	echo "jfrog install: $*" >&2
 	exit 1
 }
 
-if command -v jf >/dev/null 2>&1 && [ -z "${APP_VERSION:-}" ] && [ -z "${JFROG_CLI_FORCE_INSTALL:-}" ]; then
+usage_error() {
+	echo "jfrog install: $*" >&2
+	usage >&2
+	exit 2
+}
+
+requested=
+force=
+install_dir=/usr/local/bin
+for arg; do
+	case $arg in
+	--version=*) requested=${arg#--version=} ;;
+	--force) force=1 ;;
+	--install-dir=*) install_dir=${arg#--install-dir=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+[ -n "$install_dir" ] || usage_error "--install-dir must not be empty"
+
+if command -v jf >/dev/null 2>&1 && [ -z "$requested" ] && [ -z "$force" ]; then
 	jf --version
 	exit 0
 fi
@@ -34,7 +68,7 @@ Darwin)
 	;;
 esac
 
-version=${APP_VERSION:-${JFROG_CLI_VERSION:-'[RELEASE]'}}
+version=${requested:-'[RELEASE]'}
 url="https://releases.jfrog.io/artifactory/jfrog-cli/v2-jf/$version/jfrog-cli-$os-$arch/jf"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
@@ -43,7 +77,6 @@ echo "Downloading JFrog CLI for $os/$arch" >&2
 curl -fgLsS "$url" -o "$tmp/jf"
 chmod 0755 "$tmp/jf"
 
-install_dir=${JFROG_CLI_INSTALL_DIR:-/usr/local/bin}
 mkdir -p "$install_dir"
 install -m 0755 "$tmp/jf" "$install_dir/jf"
 "$install_dir/jf" --version

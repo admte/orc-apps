@@ -1,7 +1,29 @@
+<#
+.SYNOPSIS
+Installs the AWS CLI v2.
+
+.DESCRIPTION
+Without -Version it installs the latest release, and leaves an aws command that is
+already on PATH as it is.
+
+.PARAMETER Version
+AWS CLI release to install, e.g. 2.17.0.
+
+.PARAMETER Force
+Install even when aws is already on PATH.
+#>
+[CmdletBinding()]
+param(
+	[string]$Version = '',
+	[switch]$Force
+)
+
 $ErrorActionPreference = 'Stop'
+# Progress rendering slows downloads many times over.
+$ProgressPreference = 'SilentlyContinue'
 
 $existing = Get-Command aws -ErrorAction SilentlyContinue
-if ($existing -and -not $env:APP_VERSION -and -not $env:AWS_CLI_FORCE_INSTALL) {
+if ($existing -and -not $Version -and -not $Force) {
 	& $existing.Source --version
 	exit 0
 }
@@ -14,8 +36,8 @@ $tmp = Join-Path ([System.IO.Path]::GetTempPath()) "aws-cli-$([guid]::NewGuid())
 try {
 	New-Item -ItemType Directory -Path $tmp -Force | Out-Null
 	$msi = Join-Path $tmp 'AWSCLIV2.msi'
-	$msiUrl = if ($env:APP_VERSION) {
-		"https://awscli.amazonaws.com/AWSCLIV2-$($env:APP_VERSION).msi"
+	$msiUrl = if ($Version) {
+		"https://awscli.amazonaws.com/AWSCLIV2-$Version.msi"
 	} else {
 		'https://awscli.amazonaws.com/AWSCLIV2.msi'
 	}

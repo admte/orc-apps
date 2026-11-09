@@ -1,12 +1,47 @@
 #!/bin/sh
 set -eu
 
+usage() {
+	cat <<'USAGE'
+Usage: install-cursor.sh [--force] [--install-home=DIR] [--bin-dir=DIR]
+
+Installs the Cursor CLI with Cursor's official installer into a world-readable
+prefix and links its agent command onto PATH. Leaves an agent command that is
+already on PATH as it is.
+
+  --force             install even when agent is already on PATH
+  --install-home=DIR  prefix the installer lays the CLI out under (default: /opt/cursor)
+  --bin-dir=DIR       where the agent command is linked (default: /usr/local/bin)
+  --help              show this help
+USAGE
+}
+
 fail() {
 	echo "cursor install: $*" >&2
 	exit 1
 }
 
-if command -v agent >/dev/null 2>&1 && [ -z "${CURSOR_FORCE_INSTALL:-}" ]; then
+usage_error() {
+	echo "cursor install: $*" >&2
+	usage >&2
+	exit 2
+}
+
+force=
+install_home=/opt/cursor
+bin_dir=/usr/local/bin
+for arg; do
+	case $arg in
+	--force) force=1 ;;
+	--install-home=*) install_home=${arg#--install-home=} ;;
+	--bin-dir=*) bin_dir=${arg#--bin-dir=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+[ -n "$bin_dir" ] || usage_error "--bin-dir must not be empty"
+
+if command -v agent >/dev/null 2>&1 && [ -z "$force" ]; then
 	agent --version
 	exit 0
 fi
@@ -26,10 +61,8 @@ esac
 # per-user home (root's is 0700) would hide the CLI from every other user,
 # so pin the install to a world-readable prefix and expose the binary on
 # the global PATH.
-install_home=${CURSOR_INSTALL_HOME:-/opt/cursor}
-bin_dir=${CURSOR_BIN_DIR:-/usr/local/bin}
 case "$install_home" in
-"" | /) fail "unsafe CURSOR_INSTALL_HOME: $install_home" ;;
+"" | /) fail "unsafe --install-home: $install_home" ;;
 esac
 mkdir -p "$install_home" "$bin_dir"
 chmod 755 "$install_home"

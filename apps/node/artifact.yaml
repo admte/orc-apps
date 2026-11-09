@@ -1,4 +1,4 @@
-artifactType: application/vnd.orc8r.app.v1
+artifactType: application/vnd.orc8r.app.v2
 annotations:
   org.opencontainers.image.title: node
   org.opencontainers.image.description: Node.js JavaScript runtime
@@ -12,6 +12,16 @@ config:
       pattern: '^v(?P<version>\d+\.\d+\.\d+)$'
       latest_per: minor
       limit: 30
+  # Each release installs into its own directory, so install and uninstall both
+  # name the version they act on.
+  install:
+    command:
+      unix: ["./install-node.sh", "--version=${version}"]
+      windows: ["install-node.ps1", "-Version:${version}"]
+  uninstall:
+    command:
+      unix: ["./uninstall-node.sh", "--version=${version}"]
+      windows: ["uninstall-node.ps1", "-Version:${version}"]
 files:
   - install-node.sh
   - uninstall-node.sh

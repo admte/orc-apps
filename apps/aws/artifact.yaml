@@ -1,4 +1,4 @@
-artifactType: application/vnd.orc8r.app.v1
+artifactType: application/vnd.orc8r.app.v2
 annotations:
   org.opencontainers.image.title: aws
   # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
@@ -28,10 +28,19 @@ config:
     filter:
       pattern: "^2\\.[0-9.]+$"
       limit: 30
+  # Without a version (the `default` tag) install takes the latest release.
   install:
-    command: "{installCommand}"
+    command:
+      unix: ["./install-aws.sh", "--version=${version}"]
+      windows: ["install-aws.ps1", "-Version:${version}"]
+  # Signs in the CLI's default profile when both keys are given; the keys reach
+  # the script only as the paths of their files.
   start:
-    command: "{startCommand}"
+    command:
+      unix: ["./start-aws.sh", "--access-key-id-file=${aws_access_key_id_file}",
+             "--secret-access-key-file=${aws_secret_access_key_file}"]
+      windows: ["start-aws.ps1", "-AccessKeyIdFile:${aws_access_key_id_file}",
+                "-SecretAccessKeyFile:${aws_secret_access_key_file}"]
 files:
   - install-aws.sh
   - start-aws.sh
@@ -40,20 +49,11 @@ files:
 platforms:
   - os: linux
     arch: amd64
-    vars: &unix
-      installCommand: sh install-aws.sh
-      startCommand: sh start-aws.sh
   - os: linux
     arch: arm64
-    vars: *unix
   - os: darwin
     arch: amd64
-    vars: *unix
   - os: darwin
     arch: arm64
-    vars: *unix
   - os: windows
     arch: amd64
-    vars:
-      installCommand: powershell -NoProfile -ExecutionPolicy Bypass -File install-aws.ps1
-      startCommand: powershell -NoProfile -ExecutionPolicy Bypass -File start-aws.ps1

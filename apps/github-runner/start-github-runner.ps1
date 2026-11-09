@@ -1,29 +1,136 @@
-$ErrorActionPreference = 'Stop'
+<#
+.SYNOPSIS
+Registers this machine's runner if it has no identity yet, then runs the listener.
 
-# Start phase: registration is node identity, so it happens here — once per node,
-# every time a node that has none comes up — and never in install. A pool bake
-# runs the install phase alone and snapshots the disk, so a registration made
-# there would belong to a builder that is destroyed straight afterwards, and
-# `config.cmd` writes `.runner` and `.credentials` — the runner's own auth
-# material — into an image every clone shares. Install leaves the runner
-# unconfigured; this script gives the running node its own identity, then runs
-# the listener.
+.DESCRIPTION
+Run from the directory install ran in. A personal access token registers under the host
+name with -Labels; a runner registration supplied as a JSON object carries its own url,
+name and labels.
+
+.PARAMETER Url
+Repository or organization URL; used with a personal access token, ignored for a
+JSON registration.
+
+.PARAMETER TokenFile
+File holding a personal access token or a runner registration as a JSON object; optional
+when the runner is already registered.
+
+.PARAMETER Labels
+Comma-separated labels the runner carries with a personal access token.
+#>
+[CmdletBinding()]
+param(
+	[string]$Url = '',
+	[string]$TokenFile = '',
+	[string]$Labels = ''
+)
+
+$ErrorActionPreference = 'Stop'
+# Windows PowerShell on Server 2016 offers only TLS 1.0 and 1.1 by default, and
+# GitHub accepts nothing older than TLS 1.2.
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
+# Progress to stdout through Write-Host; warnings and errors to stderr.
+function Write-Warn($message) {
+	[Console]::Error.WriteLine("github-runner start: warning: $message")
+}
+
+# Registration gives a machine its own runner identity, so it happens here — the
+# first time the runner starts on a machine that has none — and never in install:
+# an installed disk may be imaged and copied, and `config.cmd` writes `.runner`
+# and `.credentials` — the runner's own auth material — that every copy would
+# share. Install leaves the runner unconfigured; this script registers it, then
+# runs the listener.
+
+# Returns the comma-separated labels in $value with the space around each item
+# trimmed and empty items dropped. GitHub refuses a label with a space in it or
+# longer than 256 characters, so such a label stops here.
+function Get-LabelList($value) {
+	foreach ($item in $value.Split(',')) {
+		$item = $item.Trim()
+		if (-not $item) { continue }
+		if ($item -match '[\s\p{Cc}]') {
+			throw "github-runner start: label '$item' contains a space or a control character"
+		}
+		if ($item.Length -gt 256) {
+			throw "github-runner start: label '$item' is longer than 256 characters"
+		}
+		$item
+	}
+}
+
+$labelList = @(Get-LabelList $Labels)
 
 function Get-Token {
-	if ($env:TOKEN_FILE) {
-		return (Get-Content -Raw -LiteralPath $env:TOKEN_FILE).Trim()
+	if (-not $TokenFile) {
+		throw 'github-runner start: -TokenFile is required'
 	}
-	if ($env:TOKEN) {
-		return $env:TOKEN.Trim()
+	return (Get-Content -Raw -LiteralPath $TokenFile).Trim()
+}
+
+# The token file holds either a personal access token or a runner registration
+# supplied as a JSON object. They are told apart by shape: a value whose first
+# non-blank character is `{` is the JSON registration.
+function Test-Minted($value) {
+	return [bool]($value -and $value.TrimStart().StartsWith('{'))
+}
+
+# Reads a JSON registration and returns its url, token, name and labels (joined by
+# commas). Two modes are understood: `persistent`, a repository runner, and
+# `persistent-org`, an organization runner whose url is `https://<host>[:port]/<org>`
+# — github.com or an Enterprise Server's own address.
+# Any other mode stops here with a fixed message, so a registration meant for a
+# scope this version does not know is never registered as something else. Labels
+# are required: the runner registers with them alone, without GitHub's default
+# labels.
+function Get-MintedRegistration($value) {
+	try {
+		$cred = $value | ConvertFrom-Json
+	} catch {
+		throw "github-runner start: the registration is not valid JSON: $($_.Exception.Message)"
 	}
-	throw 'TOKEN_FILE or TOKEN is required'
+	if ($cred.mode -cnotin 'persistent', 'persistent-org') {
+		throw "github-runner: credential mode $($cred.mode) is not supported by this version"
+	}
+	foreach ($key in 'url', 'token', 'name') {
+		if (-not ($cred.$key -is [string]) -or -not $cred.$key) {
+			throw "github-runner start: the JSON registration has no $key"
+		}
+	}
+	$labels = @()
+	if ($null -ne $cred.labels) {
+		if (-not ($cred.labels -is [array])) {
+			throw 'github-runner start: the JSON registration labels must be a list of names without commas'
+		}
+		foreach ($label in @($cred.labels)) {
+			if (-not ($label -is [string]) -or -not $label -or $label.Contains(',')) {
+				throw 'github-runner start: the JSON registration labels must be a list of names without commas'
+			}
+			$labels += $label
+		}
+	}
+	# https, a host with an optional port, then exactly one path segment (the org) and
+	# at most one trailing slash; no query or fragment. The same pattern as the sh.
+	if ($cred.mode -ceq 'persistent-org' -and
+		$cred.url -cnotmatch '\Ahttps://[A-Za-z0-9.-]+(:[0-9]+)?/[^/?#]+/?\z') {
+		throw 'github-runner start: a persistent-org credential url must be https://<host>/<org>'
+	}
+	if ($labels.Count -eq 0) {
+		throw 'github-runner start: the JSON registration has no labels'
+	}
+	return [pscustomobject]@{
+		url    = $cred.url
+		token  = $cred.token
+		name   = $cred.name
+		labels = $labels -join ','
+	}
 }
 
 function Get-GitHubApiPath {
-	if (-not $env:URL -or -not $env:URL.StartsWith('https://github.com/')) {
-		throw 'URL must start with https://github.com/'
+	if (-not $Url -or -not $Url.StartsWith('https://github.com/')) {
+		throw 'github-runner start: -Url must start with https://github.com/'
 	}
-	$path = $env:URL.Substring('https://github.com/'.Length).TrimEnd('/')
+	$path = $Url.Substring('https://github.com/'.Length).TrimEnd('/')
 	if ($path.EndsWith('.git')) {
 		$path = $path.Substring(0, $path.Length - 4)
 	}
@@ -51,6 +158,27 @@ function Find-RunnerId($apiPath, $headers, $name) {
 	return $null
 }
 
+# Returns the id and the name this directory's runner registered under, from
+# `.runner`: the record config.cmd writes when it registers, with a UTF-8 BOM.
+# Returns nothing when the record is missing or unreadable, so the runner is found
+# by its own registration, never by a name guessed here.
+function Get-RegistrationRecord($runnerFile) {
+	try {
+		$text = [System.IO.File]::ReadAllText($runnerFile).TrimStart([char]0xFEFF)
+		$record = $text | ConvertFrom-Json
+	} catch {
+		return $null
+	}
+	$id = $record.agentId
+	if (-not ($id -is [int] -or $id -is [long]) -or $id -le 0) {
+		return $null
+	}
+	return [pscustomobject]@{
+		id   = $id
+		name = [string]$record.agentName
+	}
+}
+
 $workDir = 'github-runner'
 if (-not (Test-Path (Join-Path $workDir 'config.cmd'))) {
 	throw "github-runner start: no runner install found; install must run first dir=$workDir"
@@ -58,22 +186,55 @@ if (-not (Test-Path (Join-Path $workDir 'config.cmd'))) {
 $workDir = (Resolve-Path $workDir).Path
 Set-Location $workDir
 
-# Runner name is the host name; its label is the pool name (pool.name x-source -> POOL).
+# Runner name is the host name; its labels are -Labels, parsed above.
 $runnerName = $env:COMPUTERNAME
-$labels = if ($env:POOL) { $env:POOL } else { '' }
+$runnerLabels = $labelList -join ','
 
 # `.runner` is the file config.cmd writes when a directory has been configured; it
-# and the `.credentials` beside it are this node's identity. Absent means the node
-# has none yet — a fresh install, or the first boot of a clone whose baked image
-# carried the unpacked runner but deliberately no identity — so register. Present
-# means an ordinary service restart, and config.cmd refuses an already-configured
-# directory, so registration is skipped and the same identity is reused. The
-# stopped hook's `config.cmd remove` deletes `.runner`, which is what makes a
-# terminated-then-restarted install register again rather than start unconfigured.
+# and the `.credentials` beside it are this machine's identity. Absent means the
+# machine has none yet — a fresh install, or the first start on a copy of an
+# installed disk, which carries the unpacked runner but deliberately no identity —
+# so register. Present means an ordinary service restart, and config.cmd refuses an
+# already-configured directory, so registration is skipped and the same identity
+# is reused. With a personal access token, stopped-github-runner.ps1's
+# `config.cmd remove` deletes `.runner`, which is what makes a
+# terminated-then-restarted install register again rather than start
+# unconfigured.
+#
+# A JSON registration carries its own url — a repository or, in the
+# persistent-org mode, an organization — runner name and labels, and the token in
+# it is already a registration token, so it goes to config.cmd as is; -Url, the
+# host name and -Labels are not used for it. An absent token is not fatal here: a
+# runner with `.runner` starts without one, and the PAT registration below fails
+# on it by name.
+try { $credential = Get-Token } catch { $credential = '' }
+$minted = Test-Minted $credential
+
 if (Test-Path (Join-Path $workDir '.runner')) {
-	Write-Host "github-runner start: already registered; reusing this node's identity name=$runnerName dir=$workDir"
+	$record = Get-RegistrationRecord (Join-Path $workDir '.runner')
+	if ($record -and $record.name) { $runnerName = $record.name }
+	Write-Host "github-runner start: already registered; reusing this machine's identity name=$runnerName dir=$workDir"
+} elseif ($minted) {
+	$registration = Get-MintedRegistration $credential
+	$runnerName = $registration.name
+	$runnerLabels = $registration.labels
+
+	# Only the registration's labels, none of GitHub's defaults: a job elsewhere in
+	# the repository or organization that asks for `self-hosted`, an OS or an
+	# architecture must not land on a runner meant only for these labels.
+	$configArgs = @('--unattended', '--url', $registration.url, '--token', $registration.token, '--name', $runnerName,
+		'--no-default-labels', '--labels', $runnerLabels, '--replace')
+
+	Write-Host "github-runner start: registering with the JSON registration name=$runnerName labels=$runnerLabels"
+	& .\config.cmd @configArgs
+	if ($LASTEXITCODE -ne 0) {
+		throw "github-runner start: config.cmd failed with exit code $LASTEXITCODE"
+	}
 } else {
-	# A registration token is short-lived, so it is minted at the moment it is
+	if (-not $Url) {
+		throw 'github-runner start: -Url is required'
+	}
+	# A registration token is short-lived, so it is requested at the moment it is
 	# used and never persisted.
 	$registration = Invoke-RestMethod -Method Post `
 		-Headers @{ Accept = 'application/vnd.github+json'; Authorization = "token $(Get-Token)" } `
@@ -82,28 +243,32 @@ if (Test-Path (Join-Path $workDir '.runner')) {
 		throw 'github-runner start: failed to create registration token'
 	}
 
-	$configArgs = @('--name', $runnerName, '--url', $env:URL, '--token', $registration.token, '--unattended', '--replace')
-	if ($labels) {
-		$configArgs += @('--labels', $labels)
+	$configArgs = @('--name', $runnerName, '--url', $Url, '--token', $registration.token, '--unattended', '--replace')
+	if ($runnerLabels) {
+		$configArgs += @('--labels', $runnerLabels)
 	}
 
-	Write-Host "github-runner start: registering name=$runnerName labels=$labels"
+	Write-Host "github-runner start: registering name=$runnerName labels=$runnerLabels"
 	& .\config.cmd @configArgs
 	if ($LASTEXITCODE -ne 0) {
 		throw "github-runner start: config.cmd failed with exit code $LASTEXITCODE"
 	}
 }
 
-# Puts the pool label back. stop-github-runner.ps1 takes it off through the API so
+# Puts the labels back. stop-github-runner.ps1 takes them off through the API so
 # the queue stops routing work here during a drain, and the registration itself
-# outlives every stop reason but `terminate` — so a drained node would otherwise
-# come back online carrying only its default labels, and `runs-on: <pool>` would
+# outlives every stop reason but `terminate` — so a drained runner would otherwise
+# come back online carrying only its default labels, and `runs-on: <label>` would
 # never match it again: healthy-looking, and silently never given another job.
-# POST .../labels adds without replacing, so this runs on both paths above,
+# POST .../labels adds without replacing, so this runs on both PAT paths above,
 # whether config.cmd just passed --labels or the registration was already there.
-# It is never fatal: a runner with no label still beats a node that will not start.
-if (-not $labels) {
-	Write-Host "github-runner start: no pool label to ensure name=$runnerName"
+# It is never fatal: a runner with no labels still beats one that will not start.
+# A JSON registration set its labels at registration and holds no API
+# credential, so there is nothing to restore: stop leaves them alone too.
+if ($minted) {
+	Write-Host "github-runner start: labels were set at registration; no label upkeep name=$runnerName"
+} elseif ($labelList.Count -eq 0) {
+	Write-Host "github-runner start: no labels to ensure name=$runnerName"
 } else {
 	try {
 		$labelHeaders = @{ Accept = 'application/vnd.github+json'; Authorization = "token $(Get-Token)" }
@@ -112,19 +277,23 @@ if (-not $labels) {
 		if (-not $runnerId) {
 			throw "runner is not registered name=$runnerName"
 		}
-		# Built from ConvertTo-Json on the label itself, so a quote or a backslash
-		# in it cannot break the body.
-		$body = '{"labels":[' + ($labels | ConvertTo-Json -Compress) + ']}'
+		# Every label in one body, each built from ConvertTo-Json on the label
+		# itself, so a quote or a backslash in it cannot break the body.
+		$body = '{"labels":[' + (($labelList | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress }) -join ',') + ']}'
 		Invoke-RestMethod -Method Post -Headers $labelHeaders -ContentType 'application/json' `
 			-Body $body -Uri "https://api.github.com/$labelApiPath/actions/runners/$runnerId/labels" | Out-Null
-		Write-Host "github-runner start: pool label ensured name=$runnerName id=$runnerId label=$labels"
+		Write-Host "github-runner start: labels ensured name=$runnerName id=$runnerId labels=$runnerLabels"
 	} catch {
-		Write-Host "github-runner start: could not ensure the pool label; starting without it name=$runnerName label=$labels error=$($_.Exception.Message)"
+		Write-Warn "could not ensure the labels; starting without them name=$runnerName labels=$runnerLabels error=$($_.Exception.Message)"
 	}
 }
 
-# The listener runs as the account the runtime runs as; there is no unprivileged-user
-# rule to satisfy on Windows.
+# The listener runs as the account that runs this script; there is no
+# unprivileged-user rule to satisfy on Windows.
 Write-Host "github-runner start: starting the listener name=$runnerName dir=$workDir"
-& .\run.cmd
+# The listener finishes and exits on Ctrl+C, the way a Windows service stops it.
+# cmd.exe, which runs run.cmd, answers Ctrl+C with "Terminate batch job (Y/N)?"
+# and waits for an answer on its input; reading from NUL, it gets none and ends
+# with the listener instead of holding the stop until it is killed.
+& cmd.exe /c 'run.cmd < NUL'
 exit $LASTEXITCODE
