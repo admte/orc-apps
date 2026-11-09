@@ -73,6 +73,10 @@ the new version *before* running the superseded version's uninstall.
 - Linux: root, `curl`, and `unzip` or `python3` to unpack. Windows: Administrator.
 - Outbound HTTPS to `github.com` and `api.github.com`. The API is always consulted, for a
   pinned version as well as `default`, because the checksum lives there.
+- On Linux with glibc older than 2.38 — Debian 12 and AlmaLinux 9 among them — the release
+  binary cannot start, so the install builds the same release with `pip` into a virtual
+  environment instead. That needs `python3` and outbound HTTPS to `pypi.org`, and takes
+  minutes rather than seconds. It happens once, while the pool image is baked.
 
 ## Build
 
@@ -84,10 +88,10 @@ the new version *before* running the superseded version's uninstall.
 
 ```bash
 tmp=$(mktemp -d)
-CHECKOV_INSTALL_ROOT="$tmp/checkov" CHECKOV_BIN_DIR="$tmp/bin" APP_VERSION=3.3.28 \
-  sh apps/checkov/install-checkov.sh
+sh apps/checkov/install-checkov.sh \
+  --version=3.3.28 --install-root="$tmp/checkov" --bin-dir="$tmp/bin"
 "$tmp/bin/checkov" --version
-CHECKOV_INSTALL_ROOT="$tmp/checkov" CHECKOV_BIN_DIR="$tmp/bin" APP_VERSION=3.3.28 \
-  sh apps/checkov/uninstall-checkov.sh
+sh apps/checkov/uninstall-checkov.sh \
+  --version=3.3.28 --install-root="$tmp/checkov" --bin-dir="$tmp/bin"
 rm -rf "$tmp"
 ```

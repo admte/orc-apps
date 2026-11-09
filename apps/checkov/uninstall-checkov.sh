@@ -1,16 +1,48 @@
 #!/bin/sh
 set -eu
 
-root=${CHECKOV_INSTALL_ROOT:-/opt/checkov}
-bin_dir=${CHECKOV_BIN_DIR:-/usr/local/bin}
-link="$bin_dir/checkov"
+usage() {
+	cat <<'USAGE'
+Usage: uninstall-checkov.sh [--version=VERSION] [--install-root=DIR] [--bin-dir=DIR]
 
-version=${APP_VERSION:-}
+Removes one Checkov release that install-checkov.sh installed, and the checkov link
+while it still points into that release.
+
+  --version=VERSION   Checkov release to remove, e.g. 3.4.0
+                      (default: the release the checkov link points at)
+  --install-root=DIR  directory each release is installed under (default: /opt/checkov)
+  --bin-dir=DIR       where checkov is linked (default: /usr/local/bin)
+  --help              show this help
+USAGE
+}
+
+usage_error() {
+	echo "checkov uninstall: $*" >&2
+	usage >&2
+	exit 2
+}
+
+version=
+root=/opt/checkov
+bin_dir=/usr/local/bin
+for arg; do
+	case $arg in
+	--version=*) version=${arg#--version=} ;;
+	--install-root=*) root=${arg#--install-root=} ;;
+	--bin-dir=*) bin_dir=${arg#--bin-dir=} ;;
+	--help) usage; exit 0 ;;
+	*) usage_error "unknown argument $arg" ;;
+	esac
+done
+[ -n "$root" ] || usage_error "--install-root must not be empty"
+[ -n "$bin_dir" ] || usage_error "--bin-dir must not be empty"
+
+link="$bin_dir/checkov"
 version=${version#v}
 
 if [ -z "$version" ]; then
-	# The install ran without a resolved version and took the then-current release, so
-	# the tree the exposure symlink points at is the one to remove.
+	# The install ran without a version and took the then-current release, so the tree
+	# the exposure symlink points at is the one to remove.
 	target=$(readlink "$link" 2>/dev/null || true)
 	case "$target" in
 	"$root"/*/checkov)
@@ -18,11 +50,18 @@ if [ -z "$version" ]; then
 		version=${version%/checkov}
 		;;
 	*)
-		echo "checkov uninstall: no installed version to remove" >&2
+		echo "checkov uninstall: no installed version to remove"
 		exit 0
 		;;
 	esac
 fi
+
+case "$version" in
+*[!0-9.]* | .* | *..* | *.)
+	echo "checkov uninstall: invalid version: $version" >&2
+	exit 1
+	;;
+esac
 
 prefix="$root/$version"
 

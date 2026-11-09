@@ -1,3 +1,15 @@
+<#
+.SYNOPSIS
+Removes one Checkov release that install-checkov.ps1 installed.
+
+.PARAMETER Version
+Checkov release, e.g. 3.4.0. Defaults to the release the current junction points at.
+#>
+[CmdletBinding()]
+param(
+	[string]$Version = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
 # Removes one version's tree, and the junction and PATH entry with it once nothing is
@@ -9,13 +21,13 @@ if (-not $env:ProgramFiles) { throw 'checkov uninstall: ProgramFiles is required
 $root = Join-Path $env:ProgramFiles 'checkov'
 $current = Join-Path $root 'current'
 
-$version = $env:APP_VERSION -replace '^v', ''
+$version = $Version -replace '^v', ''
 if ($version -and $version -notmatch '^\d+\.\d+\.\d+\z') {
-	throw "checkov uninstall: invalid APP_VERSION: $env:APP_VERSION"
+	throw "checkov uninstall: invalid version: $Version"
 }
 
 if (-not $version) {
-	# The install ran without a resolved version and took the then-current release, so
+	# The install ran without a version and took the then-current release, so
 	# the tree the junction points at is the one to remove.
 	if (-not (Test-Path -LiteralPath $current)) {
 		Write-Host 'checkov uninstall: no installed version to remove'

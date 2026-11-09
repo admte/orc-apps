@@ -1,7 +1,6 @@
-artifactType: application/vnd.orc8r.app.v1
+artifactType: application/vnd.orc8r.app.v2
 annotations:
   org.opencontainers.image.title: checkov
-  # org.opencontainers.image.version: 1.0.0    # optional; omitted -> tag "default"
   org.opencontainers.image.description: Checkov static analysis for infrastructure as code
   org.opencontainers.image.source: https://www.checkov.io
 config:
@@ -18,8 +17,17 @@ config:
       pattern: '^(?P<version>\d+\.\d+\.\d+)$'
       latest_per: minor
       limit: 30
-  install: {}
-  uninstall: {}
+  # Each release installs into its own directory. Without a version (the `default` tag)
+  # install takes the newest release the project publishes, and uninstall removes the
+  # release the exposure link points at.
+  install:
+    command:
+      unix: ["./install-checkov.sh", "--version=${version}"]
+      windows: ["install-checkov.ps1", "-Version:${version}"]
+  uninstall:
+    command:
+      unix: ["./uninstall-checkov.sh", "--version=${version}"]
+      windows: ["uninstall-checkov.ps1", "-Version:${version}"]
 files:
   - install-checkov.sh
   - uninstall-checkov.sh

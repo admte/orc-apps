@@ -1,4 +1,18 @@
+<#
+.SYNOPSIS
+Installs one Checkov release and puts it on the machine PATH.
+
+.PARAMETER Version
+Checkov release, e.g. 3.4.0. Defaults to the newest release the project publishes.
+#>
+[CmdletBinding()]
+param(
+	[string]$Version = ''
+)
+
 $ErrorActionPreference = 'Stop'
+# Progress rendering slows downloads many times over on a one-core node.
+$ProgressPreference = 'SilentlyContinue'
 
 # Installs one Checkov release under Program Files and exposes it through a `current`
 # junction plus a single machine PATH entry — the shape go, java, node, trivy, syft,
@@ -30,7 +44,7 @@ if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64' -and $env:PROCESSOR_ARCHITEW6432 -ne
 $api = 'https://api.github.com/repos/bridgecrewio/checkov/releases'
 $headers = @{ 'User-Agent' = 'orc-checkov' }
 
-$version = $env:APP_VERSION -replace '^v', ''
+$version = $Version -replace '^v', ''
 if ($version -and $version -notmatch '^\d+\.\d+\.\d+\z') { Fail "invalid version: $version" }
 
 $asset = 'checkov_windows_X86_64.zip'
@@ -43,15 +57,18 @@ $prefix = if ($version) { Join-Path $root $version } else { $null }
 
 # Runs the binary and returns what it reports, or $null. Both spellings are tried. The
 # preference is lowered because `2>&1` on a native command is a terminating error while
-# it is Stop.
+# it is Stop. Each record is turned into plain text: left as error records, Out-String
+# draws anything the binary wrote to stderr as a NativeCommandError with a stack trace.
 function Get-Reported($exe) {
 	if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { return $null }
 	$previous = $ErrorActionPreference
 	$ErrorActionPreference = 'Continue'
 	try {
 		foreach ($argument in @('--version', 'version')) {
-			$out = (& $exe $argument 2>&1 | Out-String -Width 4096).Trim()
+			$out = (& $exe $argument 2>&1 |
+				ForEach-Object { "$_" } | Out-String -Width 4096).Trim()
 			if ($LASTEXITCODE -eq 0) { return $out }
+			$script:lastReportedOutput = $out
 		}
 		return $null
 	} finally {
@@ -104,7 +121,7 @@ try {
 	if ($version) {
 		$release = Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri "$api/tags/$version"
 	} else {
-		# APP_VERSION arrives unset when the request resolved to the implicit `default`
+		# No version was requested, so the request resolved to the implicit `default`
 		# tag. The newest version has to be asked for before the disk can be checked,
 		# because until then there is no version to look for.
 		Note 'no version was requested; taking the newest release'
@@ -166,7 +183,11 @@ try {
 	# This process started before the PATH was written, so the binary is run by absolute
 	# path.
 	$reported = Get-Reported (Join-Path $prefix 'checkov.exe')
-	if (-not $reported) { Fail 'checkov does not run on this node' }
+	if (-not $reported) {
+		# Whatever it said on the way out is the only account of why it would not start.
+		if ($script:lastReportedOutput) { Write-Host $script:lastReportedOutput }
+		Fail "checkov $version does not run on this node"
+	}
 	if ($reported -notmatch [regex]::Escape($version)) {
 		Fail "installed version '$reported' does not match $version"
 	}
