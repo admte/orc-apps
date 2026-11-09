@@ -80,9 +80,58 @@ jdk-* | jdk8u*) ;;
 *) fail "unexpected release name from Adoptium: $release" ;;
 esac
 
+# java -version reports the release's own version: 27 for jdk-27+35,
+# 27.0.1.0.2 for jdk-27.0.1.0.2+1, and 1.8.0_<security> for Java 8.
+case "$release" in
+jdk8u*)
+	security=${release#jdk8u}
+	security=${security%%-*}
+	expected_version="1.8.0_$security"
+	;;
+*)
+	expected_version=${release#jdk-}
+	expected_version=${expected_version%%+*}
+	;;
+esac
+
 binary_url="$api/binary/version/$release/linux/$arch/jdk/hotspot/normal/eclipse?project=jdk"
 checksum_url="$api/checksum/version/$release/linux/$arch/jdk/hotspot/normal/eclipse?project=jdk"
 prefix="$root/$version"
+
+expose() {
+	mkdir -p "$bin_dir"
+	# Remove commands exposed by an older JDK when the selected JDK does not
+	# ship them. Only links into this app's versioned root are ours to remove.
+	for link in "$bin_dir"/*; do
+		target=$(readlink "$link" 2>/dev/null || true)
+		case "$target" in
+		"$root"/*/bin/*)
+			name=${link##*/}
+			[ -x "$prefix/bin/$name" ] || rm -f "$link"
+			;;
+		esac
+	done
+	for executable in "$prefix"/bin/*; do
+		[ -x "$executable" ] || continue
+		name=${executable##*/}
+		ln -sfn "$executable" "$bin_dir/$name"
+	done
+	ln -sfn "$prefix" "$root/current"
+}
+
+# The pool image is baked straight after this phase, and every node is rebuilt
+# from that image. Without this check each node downloads and unpacks a release
+# the disk already carries.
+if reported=$("$prefix/bin/java" -version 2>&1); then
+	case "$reported" in
+	*\""$expected_version"\"*)
+		expose
+		echo "java install: java $version is already installed"
+		exit 0
+		;;
+	esac
+fi
+
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
@@ -97,40 +146,10 @@ mkdir -p "$prefix"
 tar -xzf "$work/jdk.tar.gz" --strip-components=1 -C "$prefix"
 [ -x "$prefix/bin/java" ] || fail "java binary is missing from the archive"
 
-mkdir -p "$bin_dir"
-# Remove commands exposed by an older JDK when the selected JDK does not ship
-# them. Only links into this app's versioned root are ours to remove.
-for link in "$bin_dir"/*; do
-	target=$(readlink "$link" 2>/dev/null || true)
-	case "$target" in
-	"$root"/*/bin/*)
-		name=${link##*/}
-		[ -x "$prefix/bin/$name" ] || rm -f "$link"
-		;;
-	esac
-done
-for executable in "$prefix"/bin/*; do
-	[ -x "$executable" ] || continue
-	name=${executable##*/}
-	ln -sfn "$executable" "$bin_dir/$name"
-done
-ln -sfn "$prefix" "$root/current"
+expose
 
-# java -version reports the release's own version: 27 for jdk-27+35,
-# 27.0.1.0.2 for jdk-27.0.1.0.2+1, and 1.8.0_<security> for Java 8.
-case "$release" in
-jdk8u*)
-	security=${release#jdk8u}
-	security=${security%%-*}
-	expected_version="1.8.0_$security"
-	;;
-*)
-	expected_version=${release#jdk-}
-	expected_version=${expected_version%%+*}
-	;;
-esac
 version_output=$("$prefix/bin/java" -version 2>&1)
 case "$version_output" in
-*\""$expected_version\""*) printf '%s\n' "$version_output" >&2 ;;
+*\""$expected_version\""*) printf '%s\n' "$version_output" ;;
 *) fail "installed Java version does not match $version: $version_output" ;;
 esac

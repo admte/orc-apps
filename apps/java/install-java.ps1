@@ -80,6 +80,61 @@ $root = Join-Path $env:ProgramFiles 'java'
 $prefix = Join-Path $root $Version
 $current = Join-Path $root 'current'
 $pathEntry = Join-Path $current 'bin'
+
+function Set-Exposure {
+	New-Item -ItemType Directory -Path $root -Force | Out-Null
+	if (Test-Path -LiteralPath $current) {
+		$item = Get-Item -LiteralPath $current -Force
+		if (-not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+			throw "java install: $current exists and is not a junction"
+		}
+		$target = [IO.Path]::GetFullPath([string] $item.Target).TrimEnd('\')
+		if ($target -ne [IO.Path]::GetFullPath($prefix).TrimEnd('\')) {
+			[IO.Directory]::Delete($current)
+			New-Item -ItemType Junction -Path $current -Target $prefix | Out-Null
+		}
+	} else {
+		New-Item -ItemType Junction -Path $current -Target $prefix | Out-Null
+	}
+
+	$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+	$entries = @($machinePath -split ';' | Where-Object { $_ })
+	if ($pathEntry -notin $entries) {
+		[Environment]::SetEnvironmentVariable(
+			'Path',
+			(@($entries) + $pathEntry) -join ';',
+			'Machine'
+		)
+	}
+	[Environment]::SetEnvironmentVariable('JAVA_HOME', $current, 'Machine')
+}
+
+function Get-Reported($exe) {
+	if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { return $null }
+	$previous = $ErrorActionPreference
+	$ErrorActionPreference = 'Continue'
+	try {
+		# java writes its banner to stderr. Fold that in, and turn each record
+		# into plain text: left as error records, Out-String draws them as a
+		# NativeCommandError with a stack trace.
+		$out = (& $exe -version 2>&1 | ForEach-Object { "$_" } | Out-String -Width 4096).Trim()
+		if ($LASTEXITCODE -eq 0) { return $out }
+		return $null
+	} finally {
+		$ErrorActionPreference = $previous
+	}
+}
+
+# The pool image is baked straight after this phase, and every node is rebuilt
+# from that image. Without this check each node downloads and unpacks a release
+# the disk already carries.
+$existing = Get-Reported (Join-Path $prefix 'bin\java.exe')
+if ($existing -and $existing -match "`"$([regex]::Escape($expectedVersion))`"") {
+	Set-Exposure
+	Write-Host "java install: java $Version is already installed"
+	exit 0
+}
+
 $work = Join-Path ([System.IO.Path]::GetTempPath()) "java-$([guid]::NewGuid())"
 
 try {
@@ -100,7 +155,16 @@ try {
 	}
 
 	$unpacked = Join-Path $work 'unpacked'
-	Expand-Archive -LiteralPath $archive -DestinationPath $unpacked
+	New-Item -ItemType Directory -Path $unpacked -Force | Out-Null
+	# tar.exe, not Expand-Archive: a JDK holds thousands of files, which the
+	# cmdlet writes one at a time on PowerShell 5.1.
+	$tar = Get-Command tar.exe -ErrorAction SilentlyContinue
+	if ($tar) {
+		& $tar.Source -xf $archive -C $unpacked
+		if ($LASTEXITCODE -ne 0) { throw 'java install: could not unpack the archive' }
+	} else {
+		Expand-Archive -LiteralPath $archive -DestinationPath $unpacked
+	}
 	$source = Get-ChildItem -LiteralPath $unpacked -Directory |
 		Where-Object {
 			Test-Path -LiteralPath (Join-Path $_.FullName 'bin\java.exe') -PathType Leaf
@@ -114,30 +178,14 @@ try {
 	Remove-Item -LiteralPath $prefix -Recurse -Force -ErrorAction SilentlyContinue
 	Move-Item -LiteralPath $source.FullName -Destination $prefix
 
-	if (Test-Path -LiteralPath $current) {
-		$item = Get-Item -LiteralPath $current -Force
-		if (-not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-			throw "java install: $current exists and is not a junction"
-		}
-		[IO.Directory]::Delete($current)
-	}
-	New-Item -ItemType Junction -Path $current -Target $prefix | Out-Null
-
-	$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-	$entries = @($machinePath -split ';' | Where-Object { $_ })
-	if ($pathEntry -notin $entries) {
-		[Environment]::SetEnvironmentVariable(
-			'Path',
-			(@($entries) + $pathEntry) -join ';',
-			'Machine'
-		)
-	}
-	[Environment]::SetEnvironmentVariable('JAVA_HOME', $current, 'Machine')
+	Set-Exposure
 
 	$previousPreference = $ErrorActionPreference
 	try {
 		$ErrorActionPreference = 'Continue'
-		$versionOutput = (& (Join-Path $pathEntry 'java.exe') -version 2>&1 | Out-String)
+		# As in Get-Reported: plain text, so the banner is not drawn as an error.
+		$versionOutput = (& (Join-Path $pathEntry 'java.exe') -version 2>&1 |
+			ForEach-Object { "$_" } | Out-String)
 		$versionExitCode = $LASTEXITCODE
 	} finally {
 		$ErrorActionPreference = $previousPreference
