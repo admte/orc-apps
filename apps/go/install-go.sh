@@ -62,6 +62,27 @@ esac
 asset="go$version.linux-$arch.tar.gz"
 base=https://go.dev/dl
 prefix="$root/$version"
+
+expose() {
+	mkdir -p "$bin_dir"
+	for name in go gofmt; do
+		ln -sfn "$prefix/bin/$name" "$bin_dir/$name"
+	done
+}
+
+# The pool image is baked straight after this phase, and every node is rebuilt
+# from that image. Without this check each node deletes and re-extracts a
+# release the disk already carries.
+if reported=$("$prefix/bin/go" version 2>/dev/null); then
+	case "$reported" in
+	*" go$version "*)
+		expose
+		echo "go install: go $version is already installed"
+		exit 0
+		;;
+	esac
+fi
+
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
@@ -90,10 +111,7 @@ rm -rf "$prefix"
 mkdir -p "$prefix"
 tar -xzf "$work/$asset" --strip-components=1 -C "$prefix"
 
-mkdir -p "$bin_dir"
-for name in go gofmt; do
-	ln -sfn "$prefix/bin/$name" "$bin_dir/$name"
-done
+expose
 
 actual_version=$("$prefix/bin/go" version)
 case "$actual_version" in
