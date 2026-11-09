@@ -65,6 +65,54 @@ esac
 asset="node-v$version-linux-$arch.tar.xz"
 base="https://nodejs.org/dist/v$version"
 prefix="$root/$version"
+
+# The node binary links libatomic.so.1, which the Ubuntu 24.04, Debian 12 and
+# AlmaLinux 9/10 base images do not carry. Install it here, so the pool image is
+# baked with it rather than exiting 127 at the version check below.
+ensure_libatomic() {
+	if "$prefix/bin/node" --version >/dev/null 2>&1; then
+		return 0
+	fi
+	if command -v apt-get >/dev/null 2>&1; then
+		if DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 apt-get update -qq &&
+			DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 \
+				apt-get install -y -qq libatomic1; then
+			return 0
+		fi
+	elif command -v dnf >/dev/null 2>&1; then
+		if dnf install -y -q libatomic; then
+			return 0
+		fi
+	elif command -v yum >/dev/null 2>&1; then
+		if yum install -y -q libatomic; then
+			return 0
+		fi
+	fi
+	fail "node $version needs libatomic.so.1; install libatomic1 (Debian, Ubuntu) or libatomic (RHEL family) and run the install again"
+}
+
+expose() {
+	mkdir -p "$bin_dir"
+	for name in node npm npx corepack; do
+		if [ -e "$prefix/bin/$name" ]; then
+			ln -sfn "$prefix/bin/$name" "$bin_dir/$name"
+		fi
+	done
+}
+
+# The pool image is baked straight after this phase. Should a node rebuilt from
+# that image run the phase again, this keeps it from downloading and unpacking a
+# release the disk already carries. One that runs has its libatomic already.
+if reported=$("$prefix/bin/node" --version 2>/dev/null); then
+	case "$reported" in
+	"v$version" | "v$version"-*)
+		expose
+		echo "node install: node $version is already installed"
+		exit 0
+		;;
+	esac
+fi
+
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
@@ -79,12 +127,9 @@ rm -rf "$prefix"
 mkdir -p "$prefix"
 tar -xJf "$work/$asset" --strip-components=1 -C "$prefix"
 
-mkdir -p "$bin_dir"
-for name in node npm npx corepack; do
-	if [ -e "$prefix/bin/$name" ]; then
-		ln -sfn "$prefix/bin/$name" "$bin_dir/$name"
-	fi
-done
+ensure_libatomic
+
+expose
 
 actual_version=$("$prefix/bin/node" --version)
 case "$actual_version" in
