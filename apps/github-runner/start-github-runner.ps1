@@ -67,10 +67,10 @@ function Get-LabelList($value) {
 $labelList = @(Get-LabelList $Labels)
 
 if (-not $Ephemeral) { $Ephemeral = 'false' }
-if ($Ephemeral -cnotin 'true', 'false') {
+if ($Ephemeral -notin 'true', 'false') {
 	throw 'github-runner start: -Ephemeral must be true or false'
 }
-$isEphemeral = $Ephemeral -ceq 'true'
+$isEphemeral = $Ephemeral -eq 'true'
 
 function Get-Token {
 	if (-not $TokenFile) {
@@ -261,7 +261,7 @@ function Invoke-Listener([switch]$Jit) {
 			for ($i = 0; $i -lt 30; $i++) {
 				if (Test-Path -LiteralPath $updateFile) {
 					Write-Host 'github-runner start: the update finished'
-					Remove-Item -Force -LiteralPath $updateFile
+					Remove-Item -Force -LiteralPath $updateFile -ErrorAction SilentlyContinue
 					break
 				}
 				Start-Sleep -Seconds 1
