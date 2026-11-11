@@ -167,11 +167,11 @@ if ($record) {
 # the wait for the current job below still holds.
 try { $credential = Get-Token } catch { $credential = '' }
 
-# A JSON registration holds no API credential and set its labels when it
-# registered, so there are no labels to take off: stopping the service once the
-# job below has finished is what keeps the listener from taking another. A
-# directory with no readable `.runner` was never registered, or no longer is, so
-# there is no runner whose labels could be taken off.
+# A JSON registration, a just-in-time one included, holds no API credential and
+# set its labels when it registered, so there are no labels to take off: stopping
+# the service once the job below has finished is what keeps the listener from
+# taking another. A directory with no readable `.runner` was never registered, or
+# no longer is, so there is no runner whose labels could be taken off.
 if (-not $credential) {
 	Write-Host "github-runner stop: no credential available; skipping the label step$who"
 } elseif (Test-Minted $credential) {

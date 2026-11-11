@@ -5,7 +5,7 @@ Runs after the listener has exited; releases the runner only on a terminate.
 .DESCRIPTION
 On -StopReason:terminate it releases the registration (personal access token) or drops
 this machine's runner identity files (a JSON registration); on any other reason it keeps
-both.
+both. A just-in-time registration has nothing to release: GitHub removes the runner.
 
 .PARAMETER Url
 Repository or organization URL (personal access token).
@@ -46,7 +46,8 @@ function Write-Warn($message) {
 # reason `terminate` and on nothing else — a restart or a plain stop leaves this
 # machine's runner in place, because the same install starts again against the
 # same registration. A JSON registration carries no credential that could remove
-# it, so only its identity files here are dropped.
+# it, so only its identity files here are dropped. A just-in-time runner is removed
+# by GitHub after its job, so for it there is nothing to do here at all.
 
 if ($Attempts -notmatch '\A[0-9]+\z' -or [int]$Attempts -eq 0) {
 	throw 'github-runner stopped: -Attempts must be a positive whole number'
@@ -113,11 +114,24 @@ if (-not $credential) {
 # install that starts again registers fresh rather than running a removed
 # identity — what `config.cmd remove` does on the PAT path.
 if (Test-Minted $credential) {
+	try { $mode = ($credential | ConvertFrom-Json).mode } catch { $mode = $null }
+	if ($mode -ceq 'jit') {
+		Write-Host "github-runner stopped: just-in-time registration; GitHub removes the runner after its job, nothing to deregister reason=$reason"
+		exit 0
+	}
 	Write-Host "github-runner stopped: JSON registration; no credential here can remove it, nothing to deregister here reason=$reason"
 	foreach ($file in '.runner', '.credentials', '.credentials_rsaparams') {
 		Remove-Item -Force -LiteralPath (Join-Path $workDir $file) -ErrorAction SilentlyContinue
 	}
 	Write-Host "github-runner stopped: removed this machine's runner identity files dir=$workDir"
+	exit 0
+}
+
+# config.cmd writes `.runner` when it registers and deletes it when the runner is
+# removed, so without one there is no registration here to release. An ephemeral
+# runner leaves none once its job is done: GitHub has removed it already.
+if (-not (Test-Path (Join-Path $workDir '.runner'))) {
+	Write-Host "github-runner stopped: no registration record; nothing to deregister file=$(Join-Path $workDir '.runner') reason=$reason"
 	exit 0
 }
 

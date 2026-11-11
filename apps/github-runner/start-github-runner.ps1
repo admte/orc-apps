@@ -17,12 +17,17 @@ when the runner is already registered.
 
 .PARAMETER Labels
 Comma-separated labels the runner carries with a personal access token.
+
+.PARAMETER Ephemeral
+true: take one job, then exit (default: false). A just-in-time registration needs true,
+a persistent JSON registration false, a personal access token either.
 #>
 [CmdletBinding()]
 param(
 	[string]$Url = '',
 	[string]$TokenFile = '',
-	[string]$Labels = ''
+	[string]$Labels = '',
+	[string]$Ephemeral = 'false'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -61,6 +66,12 @@ function Get-LabelList($value) {
 
 $labelList = @(Get-LabelList $Labels)
 
+if (-not $Ephemeral) { $Ephemeral = 'false' }
+if ($Ephemeral -cnotin 'true', 'false') {
+	throw 'github-runner start: -Ephemeral must be true or false'
+}
+$isEphemeral = $Ephemeral -ceq 'true'
+
 function Get-Token {
 	if (-not $TokenFile) {
 		throw 'github-runner start: -TokenFile is required'
@@ -75,23 +86,50 @@ function Test-Minted($value) {
 	return [bool]($value -and $value.TrimStart().StartsWith('{'))
 }
 
-# Reads a JSON registration and returns its url, token, name and labels (joined by
-# commas). Two modes are understood: `persistent`, a repository runner, and
-# `persistent-org`, an organization runner whose url is `https://<host>[:port]/<org>`
-# — github.com or an Enterprise Server's own address.
-# Any other mode stops here with a fixed message, so a registration meant for a
-# scope this version does not know is never registered as something else. Labels
-# are required: the runner registers with them alone, without GitHub's default
-# labels.
-function Get-MintedRegistration($value) {
+# Reads a JSON registration and returns it. Three modes are understood:
+# `persistent`, a repository runner; `persistent-org`, an organization runner; and
+# `jit`, a just-in-time runner configuration that takes one job. Any other mode
+# stops here with a fixed message, so a registration meant for a scope this
+# version does not know is never registered as something else.
+function Read-Registration($value) {
 	try {
 		$cred = $value | ConvertFrom-Json
 	} catch {
 		throw "github-runner start: the registration is not valid JSON: $($_.Exception.Message)"
 	}
-	if ($cred.mode -cnotin 'persistent', 'persistent-org') {
+	if ($cred.mode -cnotin 'persistent', 'persistent-org', 'jit') {
 		throw "github-runner: credential mode $($cred.mode) is not supported by this version"
 	}
+	return $cred
+}
+
+# Returns a `jit` registration's runner name and encoded runner configuration. The
+# configuration is checked to be base64, so it is one line with nothing in it cmd.exe
+# or the runner could read as anything else.
+function Get-JitRegistration($cred) {
+	foreach ($key in 'name', 'jitconfig') {
+		if (-not ($cred.$key -is [string]) -or -not $cred.$key) {
+			throw "github-runner start: the just-in-time registration has no $key"
+		}
+	}
+	if ($cred.name -match '[\r\n]') {
+		throw 'github-runner start: the just-in-time registration name contains a line break'
+	}
+	if ($cred.jitconfig -cnotmatch '\A[A-Za-z0-9+/]+={0,2}\z') {
+		throw 'github-runner start: the just-in-time registration jitconfig is not base64'
+	}
+	return [pscustomobject]@{
+		name      = $cred.name
+		jitconfig = $cred.jitconfig
+	}
+}
+
+# Returns a persistent registration's url, token, name and labels (joined by
+# commas). `persistent` is a repository runner; `persistent-org` an organization
+# runner whose url is `https://<host>[:port]/<org>` — github.com or an Enterprise
+# Server's own address. Labels are required: the runner registers with them alone,
+# without GitHub's default labels.
+function Get-MintedRegistration($cred) {
 	foreach ($key in 'url', 'token', 'name') {
 		if (-not ($cred.$key -is [string]) -or -not $cred.$key) {
 			throw "github-runner start: the JSON registration has no $key"
@@ -209,13 +247,74 @@ $runnerLabels = $labelList -join ','
 # on it by name.
 try { $credential = Get-Token } catch { $credential = '' }
 $minted = Test-Minted $credential
+$mode = 'token'
+$readError = $null
+# Read leniently here: a registration that cannot be read only matters when it is
+# about to be used. A runner with `.runner` restarts without it; the registration
+# below stops with the reason.
+if ($minted) {
+	try {
+		$cred = Read-Registration $credential
+		$mode = $cred.mode
+	} catch {
+		$readError = $_
+		$mode = 'unreadable'
+	}
+}
+
+# -Ephemeral must agree with the credential. A just-in-time registration is
+# ephemeral by construction, and a persistent JSON registration cannot be made
+# ephemeral here, so either mismatch stops before anything is registered. A
+# personal access token registers whichever way -Ephemeral says.
+if ($mode -ceq 'jit' -and -not $isEphemeral) {
+	throw 'github-runner start: a just-in-time registration takes one job and exits; start it with -Ephemeral:true'
+}
+if (($mode -cin 'persistent', 'persistent-org') -and $isEphemeral) {
+	throw "github-runner start: a $mode registration is not ephemeral; start it with -Ephemeral:false, or supply a just-in-time registration"
+}
+
+# A just-in-time registration is the runner's whole configuration: the listener
+# starts from it with no config.cmd, takes one job and exits. It is never reused, so a `.runner` an earlier start
+# left behind does not make it "already registered"; its labels are part of the
+# configuration, so there is no label upkeep. The listener writes the identity
+# files from the configuration each time it starts, as hidden files it cannot
+# overwrite, so those an earlier start wrote are removed first. Reading from NUL
+# is for Ctrl+C, as for the listener at the end of this script.
+#
+# That removal covers this launch only. run.cmd launches the listener again by
+# itself after a self-update or a retryable exit, and the new listener writes the
+# hidden identity files over the ones the first one wrote, which can fail. Keep the
+# runner in the machine image current, so it has no update to apply.
+#
+# The configuration reaches the listener as ACTIONS_RUNNER_INPUT_JITCONFIG, which
+# the runner reads exactly as it reads `run.cmd --jitconfig`, and then clears from
+# its own environment. Never on a command line: a process's arguments are visible
+# to every user of the machine, its environment only to its own account and
+# administrators. It is set in this process only, for cmd.exe to inherit, and is
+# not logged.
+if ($mode -ceq 'jit') {
+	$jit = Get-JitRegistration $cred
+	foreach ($file in '.runner', '.credentials', '.credentials_rsaparams') {
+		Remove-Item -Force -LiteralPath (Join-Path $workDir $file) -ErrorAction SilentlyContinue
+	}
+	Write-Host "github-runner start: starting the just-in-time listener name=$($jit.name) dir=$workDir"
+	$env:ACTIONS_RUNNER_INPUT_JITCONFIG = $jit.jitconfig
+	try {
+		& cmd.exe /c 'run.cmd < NUL'
+		$code = $LASTEXITCODE
+	} finally {
+		Remove-Item -LiteralPath Env:ACTIONS_RUNNER_INPUT_JITCONFIG -ErrorAction SilentlyContinue
+	}
+	exit $code
+}
 
 if (Test-Path (Join-Path $workDir '.runner')) {
 	$record = Get-RegistrationRecord (Join-Path $workDir '.runner')
 	if ($record -and $record.name) { $runnerName = $record.name }
 	Write-Host "github-runner start: already registered; reusing this machine's identity name=$runnerName dir=$workDir"
 } elseif ($minted) {
-	$registration = Get-MintedRegistration $credential
+	if ($readError) { throw $readError }
+	$registration = Get-MintedRegistration $cred
 	$runnerName = $registration.name
 	$runnerLabels = $registration.labels
 
@@ -247,8 +346,13 @@ if (Test-Path (Join-Path $workDir '.runner')) {
 	if ($runnerLabels) {
 		$configArgs += @('--labels', $runnerLabels)
 	}
+	# An ephemeral runner takes one job, then GitHub removes it and the listener
+	# exits.
+	if ($isEphemeral) {
+		$configArgs += '--ephemeral'
+	}
 
-	Write-Host "github-runner start: registering name=$runnerName labels=$runnerLabels"
+	Write-Host "github-runner start: registering name=$runnerName labels=$runnerLabels ephemeral=$Ephemeral"
 	& .\config.cmd @configArgs
 	if ($LASTEXITCODE -ne 0) {
 		throw "github-runner start: config.cmd failed with exit code $LASTEXITCODE"

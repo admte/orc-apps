@@ -6,7 +6,8 @@ set -eu
 # reason `terminate` and on nothing else — a restart or a plain stop leaves this
 # machine's runner in place, because the same install starts again against the
 # same registration. A JSON registration carries no credential that could remove
-# it, so only its identity files here are dropped.
+# it, so only its identity files here are dropped. A just-in-time runner is removed
+# by GitHub after its job, so for it there is nothing to do here at all.
 
 usage() {
 	cat <<'USAGE'
@@ -16,7 +17,8 @@ Usage: stopped-github-runner.sh [--url=URL] [--token-file=PATH] [--stop-reason=R
 
 Runs after the listener has exited. On --stop-reason=terminate it releases the
 runner registration (personal access token) or drops this machine's runner
-identity files (a JSON registration); on any other reason it keeps both.
+identity files (a JSON registration); on any other reason it keeps both. A
+just-in-time registration has nothing to release: GitHub removes the runner.
 
   --url=URL                 repository or organization URL (personal access token)
   --token-file=PATH         file holding a personal access token or a runner
@@ -114,6 +116,16 @@ github_api_path() {
 	fi
 }
 
+# Prints the mode of the JSON registration on stdin, or nothing when it has none.
+registration_mode() {
+	python3 -c '
+import json, sys
+cred = json.load(sys.stdin)
+mode = cred.get("mode") if isinstance(cred, dict) else None
+print(mode if isinstance(mode, str) else "")
+' 2>/dev/null || true
+}
+
 json_field() {
 	python3 -c 'import json,sys; print(json.load(sys.stdin).get(sys.argv[1], ""))' "$1"
 }
@@ -152,9 +164,21 @@ fi
 # install that starts again registers fresh rather than running a removed
 # identity — what `config.sh remove` does on the PAT path.
 if is_minted "$credential"; then
+	if [ "$(printf '%s' "$credential" | registration_mode)" = jit ]; then
+		note "just-in-time registration; GitHub removes the runner after its job, nothing to deregister reason=$reason"
+		exit 0
+	fi
 	note "JSON registration; no credential here can remove it, nothing to deregister here reason=$reason"
 	rm -f "$work_dir/.runner" "$work_dir/.credentials" "$work_dir/.credentials_rsaparams"
 	note "removed this machine's runner identity files dir=$work_dir"
+	exit 0
+fi
+
+# config.sh writes `.runner` when it registers and deletes it when the runner is
+# removed, so without one there is no registration here to release. An ephemeral
+# runner leaves none once its job is done: GitHub has removed it already.
+if [ ! -f "$work_dir/.runner" ]; then
+	note "no registration record; nothing to deregister file=$work_dir/.runner reason=$reason"
 	exit 0
 fi
 
