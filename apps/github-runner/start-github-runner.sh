@@ -6,12 +6,13 @@ set -eu
 # an installed disk may be imaged and copied, and `config.sh` writes `.runner`
 # and `.credentials` — the runner's own auth material — that every copy would
 # share. Install leaves the runner unconfigured; this script registers it, then
-# becomes the listener.
+# becomes the listener. A just-in-time registration is never configured here: the
+# listener starts from it directly, takes one job and exits.
 
 usage() {
 	cat <<'USAGE'
 Usage: start-github-runner.sh [--url=URL] [--token-file=PATH] [--labels=LIST]
-                              [--service-user=NAME]
+                              [--ephemeral=true|false] [--service-user=NAME]
 
 Registers this machine's runner if it has no identity yet, then becomes the
 listener. Run as root from the directory install ran in.
@@ -23,6 +24,9 @@ listener. Run as root from the directory install ran in.
                        registered
   --labels=LIST        comma-separated labels the runner carries with a personal
                        access token
+  --ephemeral=BOOL     true: take one job, then exit (default: false); a
+                       just-in-time registration needs true, a persistent JSON
+                       registration false, a personal access token either
   --service-user=NAME  account the listener runs as (default: ghrunner)
   --help               show this help
 USAGE
@@ -62,18 +66,25 @@ parse_labels() {
 repo_url=
 token_file=
 labels_arg=
+ephemeral=false
 service_user=ghrunner
 for arg; do
 	case $arg in
 	--url=*) repo_url=${arg#--url=} ;;
 	--token-file=*) token_file=${arg#--token-file=} ;;
 	--labels=*) labels_arg=${arg#--labels=} ;;
+	--ephemeral=*) ephemeral=${arg#--ephemeral=} ;;
 	--service-user=*) service_user=${arg#--service-user=} ;;
 	--help) usage; exit 0 ;;
 	*) usage_error "unknown argument $arg" ;;
 	esac
 done
 [ -n "$service_user" ] || usage_error "--service-user must not be empty"
+case $ephemeral in
+'') ephemeral=false ;;
+true | false) ;;
+*) usage_error "--ephemeral must be true or false" ;;
+esac
 parse_labels "$labels_arg"
 
 # Progress to stdout; warnings and errors to stderr.
@@ -109,16 +120,15 @@ is_minted() {
 	esac
 }
 
-# Reads a JSON registration from stdin and prints its url, token, name and labels
-# (joined by commas), one per line. Two modes are understood: `persistent`, a
-# repository runner, and `persistent-org`, an organization runner whose url is
-# `https://<host>[:port]/<org>`, on github.com or an Enterprise Server. Any other
-# mode stops here with a fixed message, so a registration meant for a scope this
-# version does not know is never registered as something else. Labels are
-# required: the runner registers with them alone, without GitHub's default labels.
-minted_registration() {
+# Reads a JSON registration from stdin and prints its mode. Three modes are
+# understood: `persistent`, a repository runner; `persistent-org`, an
+# organization runner; and `jit`, a just-in-time runner configuration that takes
+# one job. Any other mode stops here with a fixed message, so a registration
+# meant for a scope this version does not know is never registered as something
+# else.
+registration_mode() {
 	python3 -c '
-import json, re, sys
+import json, sys
 def die(message):
     print(message, file=sys.stderr)
     sys.exit(1)
@@ -129,8 +139,50 @@ except ValueError as err:
 if not isinstance(cred, dict):
     die("github-runner start: the registration is not a JSON object")
 mode = cred.get("mode")
-if mode not in ("persistent", "persistent-org"):
+if mode not in ("persistent", "persistent-org", "jit"):
     die("github-runner: credential mode %s is not supported by this version" % mode)
+print(mode)
+'
+}
+
+# Reads a `jit` registration from stdin and prints its runner name and its
+# encoded runner configuration, one per line. The configuration is checked to be
+# base64, so it is one line with nothing in it a shell or the runner could read
+# as anything else.
+jit_registration() {
+	python3 -c '
+import json, re, sys
+def die(message):
+    print(message, file=sys.stderr)
+    sys.exit(1)
+cred = json.load(sys.stdin)
+fields = []
+for key in ("name", "jitconfig"):
+    value = cred.get(key)
+    if not isinstance(value, str) or not value:
+        die("github-runner start: the just-in-time registration has no %s" % key)
+    fields.append(value)
+if "\n" in fields[0] or "\r" in fields[0]:
+    die("github-runner start: the just-in-time registration name contains a line break")
+if not re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", fields[1]):
+    die("github-runner start: the just-in-time registration jitconfig is not base64")
+print("\n".join(fields))
+'
+}
+
+# Reads a persistent JSON registration from stdin and prints its url, token, name
+# and labels (joined by commas), one per line. `persistent` is a repository
+# runner; `persistent-org` an organization runner whose url is
+# `https://<host>[:port]/<org>`, on github.com or an Enterprise Server. Labels are
+# required: the runner registers with them alone, without GitHub's default labels.
+minted_registration() {
+	python3 -c '
+import json, re, sys
+def die(message):
+    print(message, file=sys.stderr)
+    sys.exit(1)
+cred = json.load(sys.stdin)
+mode = cred.get("mode")
 fields = []
 for key in ("url", "token", "name"):
     value = cred.get(key)
@@ -277,8 +329,6 @@ as_service_user() {
 		env HOME="$work_dir" "$@"
 }
 
-need curl
-need hostname
 need python3
 need setpriv
 
@@ -287,9 +337,6 @@ work_dir=github-runner
 	fail "no runner install found; install must run first dir=$work_dir"
 work_dir=$(CDPATH= cd -- "$work_dir" && pwd)
 cd "$work_dir"
-
-# The runner name is the host name. Its labels are --labels, parsed above.
-runner_name=$(hostname)
 
 # `.runner` is the file config.sh writes when a directory has been configured; it
 # and the `.credentials` beside it are this machine's identity. Absent means the
@@ -311,15 +358,63 @@ runner_name=$(hostname)
 credential=$(token_value 2>/dev/null) || credential=
 if is_minted "$credential"; then
 	minted=yes
+	# Read leniently here: a registration that cannot be read only matters when it
+	# is about to be used. A runner with `.runner` restarts without it; the
+	# registration below reads it again and stops with the reason.
+	mode=$(printf '%s' "$credential" | registration_mode 2>/dev/null) || mode=unreadable
 else
 	minted=no
+	mode=token
 fi
+
+# --ephemeral must agree with the credential. A just-in-time registration is
+# ephemeral by construction, and a persistent JSON registration cannot be made
+# ephemeral here, so either mismatch stops before anything is registered. A
+# personal access token registers whichever way --ephemeral says.
+case $mode:$ephemeral in
+jit:false)
+	fail "a just-in-time registration takes one job and exits; start it with --ephemeral=true" ;;
+persistent:true | persistent-org:true)
+	fail "a $mode registration is not ephemeral; start it with --ephemeral=false, or supply a just-in-time registration" ;;
+esac
+
+# A just-in-time registration is the runner's whole configuration: the listener
+# starts from it with no config.sh, takes one job and exits. It is never reused, so a `.runner` an earlier start
+# left behind does not make it "already registered"; its labels are part of the
+# configuration, so there is no label upkeep. The listener writes the identity
+# files from the configuration each time it starts, so those an earlier start
+# wrote are removed first.
+#
+# The configuration reaches the listener as ACTIONS_RUNNER_INPUT_JITCONFIG, which
+# the runner reads exactly as it reads `run.sh --jitconfig`, and then clears from
+# its own environment. Never on a command line: a process's arguments are visible
+# to every user of the machine, its environment only to its own account and root.
+# It is exported by this shell, not set through `env`, so no argument list ever
+# carries it, and it is not logged.
+if [ "$mode" = jit ]; then
+	registration=$(printf '%s' "$credential" | jit_registration) || exit 1
+	runner_name=$(printf '%s\n' "$registration" | sed -n 1p)
+	jitconfig=$(printf '%s\n' "$registration" | sed -n 2p)
+	rm -f .runner .credentials .credentials_rsaparams
+	ACTIONS_RUNNER_INPUT_JITCONFIG=$jitconfig
+	export ACTIONS_RUNNER_INPUT_JITCONFIG
+	note "starting the just-in-time listener name=$runner_name dir=$work_dir"
+	exec setpriv --reuid="$service_user" --regid="$service_user" --init-groups \
+		env HOME="$work_dir" ./run.sh
+fi
+
+need curl
+need hostname
+
+# The runner name is the host name. Its labels are --labels, parsed above.
+runner_name=$(hostname)
 
 if [ -f .runner ]; then
 	registered=$(registration_record "$work_dir/.runner" | sed -n 2p)
 	runner_name=${registered:-$runner_name}
 	note "already registered; reusing this machine's identity name=$runner_name dir=$work_dir"
 elif [ "$minted" = yes ]; then
+	printf '%s' "$credential" | registration_mode >/dev/null || exit 1
 	registration=$(printf '%s' "$credential" | minted_registration) || exit 1
 	minted_url=$(printf '%s\n' "$registration" | sed -n 1p)
 	minted_token=$(printf '%s\n' "$registration" | sed -n 2p)
@@ -353,8 +448,13 @@ else
 	if [ -n "$labels" ]; then
 		set -- "$@" --labels "$labels"
 	fi
+	# An ephemeral runner takes one job, then GitHub removes it and the listener
+	# exits.
+	if [ "$ephemeral" = true ]; then
+		set -- "$@" --ephemeral
+	fi
 
-	note "registering name=$runner_name labels=$labels user=$service_user"
+	note "registering name=$runner_name labels=$labels ephemeral=$ephemeral user=$service_user"
 	as_service_user ./config.sh "$@"
 fi
 

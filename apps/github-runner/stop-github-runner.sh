@@ -203,11 +203,11 @@ fi
 # the wait for the current job below still holds.
 credential=$(token_value 2>/dev/null) || credential=
 
-# A JSON registration holds no API credential and set its labels when it
-# registered, so there are no labels to take off: stopping the listener once the
-# job below has finished is what keeps it from taking another. A directory with
-# no readable `.runner` was never registered, or no longer is, so there is no
-# runner whose labels could be taken off.
+# A JSON registration, a just-in-time one included, holds no API credential and
+# set its labels when it registered, so there are no labels to take off: stopping
+# the listener once the job below has finished is what keeps it from taking
+# another. A directory with no readable `.runner` was never registered, or no
+# longer is, so there is no runner whose labels could be taken off.
 if [ -z "$credential" ]; then
 	note "no credential available; skipping the label step$who"
 elif is_minted "$credential"; then

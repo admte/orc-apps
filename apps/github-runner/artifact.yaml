@@ -35,6 +35,15 @@ config:
         description: Comma-separated labels to register the runner with
         x-source:
           kind: pool.name
+      # Supplied by the host, never typed by an operator. A just-in-time
+      # registration needs `true`; a personal access token takes either value.
+      ephemeral:
+        type: boolean
+        title: Ephemeral runner
+        description: Take one job, then exit
+        default: false
+        x-source:
+          kind: pool.on_demand
   # Downloads and unpacks the runner and nothing else. Registration is the start
   # phase's, so a disk imaged after install carries no runner identity and no
   # `.credentials`. It takes no url and no token: the build is the latest public
@@ -51,9 +60,9 @@ config:
     service: github-runner
     command:
       unix: ["./start-github-runner.sh", "--url=${url}", "--token-file=${token_file}",
-             "--labels=${labels}"]
+             "--labels=${labels}", "--ephemeral=${ephemeral}"]
       windows: ["start-github-runner.ps1", "-Url:${url}", "-TokenFile:${token_file}",
-                "-Labels:${labels}"]
+                "-Labels:${labels}", "-Ephemeral:${ephemeral}"]
   # SIGINT is what the Actions listener reads as "finish this job, then exit", so
   # it is the signal the generated service definition carries. The command has
   # already waited for the job by the time it is sent; the hour is the cap on
@@ -69,6 +78,8 @@ config:
                 "-Labels:${labels}"]
   # Only on stop reason `terminate`: removes a runner registered with a personal
   # access token from GitHub. A restart or a plain stop keeps the registration.
+  # GitHub removes a just-in-time runner after its job, so there is nothing to
+  # remove for one.
   stopped:
     timeout: 120s
     command:
