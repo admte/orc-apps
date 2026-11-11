@@ -54,8 +54,9 @@ config:
       windows: ["install-github-runner.ps1", "-Arch:${arch}"]
   # Managed service: the service definition is generated from this block, so the
   # package never calls svc.sh install or config.cmd --runasservice. The script
-  # registers, then execs the listener, so the stop signal reaches the runner
-  # itself.
+  # registers, then runs the listener as its child in the same process group (on
+  # the same console on Windows), so the stop signal reaches the runner itself,
+  # and exits with how the listener ended: a crash or a kill is never a clean exit.
   start:
     service: github-runner
     command:

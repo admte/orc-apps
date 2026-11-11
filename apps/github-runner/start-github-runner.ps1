@@ -217,6 +217,63 @@ function Get-RegistrationRecord($runnerFile) {
 	}
 }
 
+# Runs the listener until it ends for good and leaves how it ended in
+# $script:listenerExit.
+#
+# The runner's own run.cmd relaunches the listener the same way, but it exits 0
+# for every end it does not relaunch on, so a listener that crashed, failed or was
+# ended by another process would read as one that finished. The rules here are
+# run.cmd's, with every such end passed on:
+#
+#   0     finished, including after a stop or a one-job runner's job
+#   2     retryable error: relaunch after 5 seconds
+#   3, 4  self-update: relaunch once the update has written update.finished, or
+#         after about 30 seconds
+#   other that code (1 is an error, 5 a session conflict)
+#
+# A just-in-time listener writes its identity files from its configuration each
+# time it starts, as hidden files it cannot overwrite, so -Jit removes those an
+# earlier launch wrote before each one.
+#
+# The listener runs on this script's console, so the stop's Ctrl+C reaches it
+# directly; it finishes its job and exits, and PowerShell, stopped by the same
+# Ctrl+C, relaunches nothing. Call this bare, never as `$x = Invoke-Listener`:
+# that would capture the listener's output along with the function's.
+function Invoke-Listener([switch]$Jit) {
+	$listener = Join-Path $workDir 'bin\Runner.Listener.exe'
+	$updateFile = Join-Path $workDir 'update.finished'
+	while ($true) {
+		if ($Jit) {
+			foreach ($file in '.runner', '.credentials', '.credentials_rsaparams') {
+				Remove-Item -Force -LiteralPath (Join-Path $workDir $file) -ErrorAction SilentlyContinue
+			}
+		}
+		& $listener run
+		$code = $LASTEXITCODE
+		if ($code -eq 0) {
+			Write-Host 'github-runner start: the listener finished'
+			break
+		} elseif ($code -eq 2) {
+			Write-Host 'github-runner start: the listener ended with a retryable error; relaunching in 5 seconds'
+			Start-Sleep -Seconds 5
+		} elseif ($code -eq 3 -or $code -eq 4) {
+			Write-Host 'github-runner start: the listener ended to update itself; relaunching once the update is in place'
+			for ($i = 0; $i -lt 30; $i++) {
+				if (Test-Path -LiteralPath $updateFile) {
+					Write-Host 'github-runner start: the update finished'
+					Remove-Item -Force -LiteralPath $updateFile
+					break
+				}
+				Start-Sleep -Seconds 1
+			}
+		} else {
+			Write-Warn "the listener ended with an error exit_code=$code"
+			break
+		}
+	}
+	$script:listenerExit = $code
+}
+
 $workDir = 'github-runner'
 if (-not (Test-Path (Join-Path $workDir 'config.cmd'))) {
 	throw "github-runner start: no runner install found; install must run first dir=$workDir"
@@ -276,36 +333,26 @@ if (($mode -cin 'persistent', 'persistent-org') -and $isEphemeral) {
 # A just-in-time registration is the runner's whole configuration: the listener
 # starts from it with no config.cmd, takes one job and exits. It is never reused, so a `.runner` an earlier start
 # left behind does not make it "already registered"; its labels are part of the
-# configuration, so there is no label upkeep. The listener writes the identity
-# files from the configuration each time it starts, as hidden files it cannot
-# overwrite, so those an earlier start wrote are removed first. Reading from NUL
-# is for Ctrl+C, as for the listener at the end of this script.
-#
-# That removal covers this launch only. run.cmd launches the listener again by
-# itself after a self-update or a retryable exit, and the new listener writes the
-# hidden identity files over the ones the first one wrote, which can fail. Keep the
-# runner in the machine image current, so it has no update to apply.
+# configuration, so there is no label upkeep. Invoke-Listener removes the identity
+# files an earlier launch wrote before each one. The listener exits 0 after its
+# job, which ends this script, so it never takes a second one.
 #
 # The configuration reaches the listener as ACTIONS_RUNNER_INPUT_JITCONFIG, which
-# the runner reads exactly as it reads `run.cmd --jitconfig`, and then clears from
+# the runner reads exactly as it reads `--jitconfig`, and then clears from
 # its own environment. Never on a command line: a process's arguments are visible
 # to every user of the machine, its environment only to its own account and
-# administrators. It is set in this process only, for cmd.exe to inherit, and is
-# not logged.
+# administrators. It is set in this process only, for the listener to inherit, and
+# is not logged.
 if ($mode -ceq 'jit') {
 	$jit = Get-JitRegistration $cred
-	foreach ($file in '.runner', '.credentials', '.credentials_rsaparams') {
-		Remove-Item -Force -LiteralPath (Join-Path $workDir $file) -ErrorAction SilentlyContinue
-	}
 	Write-Host "github-runner start: starting the just-in-time listener name=$($jit.name) dir=$workDir"
 	$env:ACTIONS_RUNNER_INPUT_JITCONFIG = $jit.jitconfig
 	try {
-		& cmd.exe /c 'run.cmd < NUL'
-		$code = $LASTEXITCODE
+		Invoke-Listener -Jit
 	} finally {
 		Remove-Item -LiteralPath Env:ACTIONS_RUNNER_INPUT_JITCONFIG -ErrorAction SilentlyContinue
 	}
-	exit $code
+	exit $script:listenerExit
 }
 
 if (Test-Path (Join-Path $workDir '.runner')) {
@@ -396,8 +443,8 @@ if ($minted) {
 # unprivileged-user rule to satisfy on Windows.
 Write-Host "github-runner start: starting the listener name=$runnerName dir=$workDir"
 # The listener finishes and exits on Ctrl+C, the way a Windows service stops it.
-# cmd.exe, which runs run.cmd, answers Ctrl+C with "Terminate batch job (Y/N)?"
-# and waits for an answer on its input; reading from NUL, it gets none and ends
-# with the listener instead of holding the stop until it is killed.
-& cmd.exe /c 'run.cmd < NUL'
-exit $LASTEXITCODE
+# It runs directly, not through run.cmd: cmd.exe answers Ctrl+C in a batch file
+# with "Terminate batch job (Y/N)?", and run.cmd turns every listener end it does
+# not relaunch on into exit 0.
+Invoke-Listener
+exit $script:listenerExit

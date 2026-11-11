@@ -6,16 +6,18 @@ set -eu
 # an installed disk may be imaged and copied, and `config.sh` writes `.runner`
 # and `.credentials` — the runner's own auth material — that every copy would
 # share. Install leaves the runner unconfigured; this script registers it, then
-# becomes the listener. A just-in-time registration is never configured here: the
-# listener starts from it directly, takes one job and exits.
+# runs the listener until it ends and exits with how it ended. A just-in-time
+# registration is never configured here: the listener starts from it directly,
+# takes one job and exits.
 
 usage() {
 	cat <<'USAGE'
 Usage: start-github-runner.sh [--url=URL] [--token-file=PATH] [--labels=LIST]
                               [--ephemeral=true|false] [--service-user=NAME]
 
-Registers this machine's runner if it has no identity yet, then becomes the
-listener. Run as root from the directory install ran in.
+Registers this machine's runner if it has no identity yet, then runs the
+listener and exits with how it ended. Run as root from the directory install
+ran in.
 
   --url=URL            repository or organization URL; used with a personal
                        access token, ignored for a JSON registration
@@ -329,6 +331,84 @@ as_service_user() {
 		env HOME="$work_dir" "$@"
 }
 
+# Runs the listener until it ends for good, then exits with how it ended.
+#
+# The runner's own run.sh relaunches the listener the same way, but it exits 0
+# for every end it does not relaunch on, so a listener that crashed, failed or
+# was killed would read as one that finished. The rules here are run.sh's, with
+# every such end passed on:
+#
+#   0     finished, including after a stop signal or a one-job runner's job: exit 0
+#   2     retryable error: relaunch after 5 seconds
+#   3, 4  self-update: relaunch once the update has written update.finished, or
+#         after about 30 seconds
+#   other exit with that code (1 is an error, 5 a session conflict)
+#   killed by a signal: exit 128 + the signal number
+#
+# The listener runs in the foreground, never with `&`: a non-interactive shell
+# starts a background command with SIGINT ignored, and SIGINT is what asks the
+# listener to finish its job and exit. The stop signal goes to the process
+# group, so the listener receives it itself; the traps keep this shell from
+# dying of it first. A trapped signal waits for the foreground command, so the
+# shell outlives the listener and passes its end on, and once a stop is asked
+# for, nothing is relaunched. A listener that dies of the stop signal ends this
+# shell with the same signal, as the service would end without this script.
+run_listener() {
+	stop=
+	trap 'stop=INT' INT
+	trap 'stop=TERM' TERM
+	while :; do
+		# A just-in-time listener writes the identity files from its configuration
+		# each time it starts, so those an earlier launch wrote go first.
+		if [ "$mode" = jit ]; then
+			rm -f .runner .credentials .credentials_rsaparams
+		fi
+		code=0
+		as_service_user ./bin/Runner.Listener run || code=$?
+		case $code in
+		0)
+			note "the listener finished"
+			exit 0
+			;;
+		2)
+			note "the listener ended with a retryable error; relaunching in 5 seconds"
+			[ -n "$stop" ] || sleep 5 || :
+			;;
+		3 | 4)
+			note "the listener ended to update itself; relaunching once the update is in place"
+			waited=0
+			while [ -z "$stop" ] && [ "$waited" -le 30 ]; do
+				if [ -f update.finished ]; then
+					note "the update finished"
+					rm -f update.finished
+					break
+				fi
+				sleep 1 || :
+				waited=$((waited + 1))
+			done
+			;;
+		*)
+			if [ "$code" -gt 128 ]; then
+				signal=$((code - 128))
+				if [ -n "$stop" ] && [ "$(kill -l "$signal")" = "$stop" ]; then
+					note "the listener ended on the stop signal $stop"
+					trap - "$stop"
+					kill -s "$stop" $$
+				fi
+				warn "the listener was killed by signal $(kill -l "$signal" 2>/dev/null || echo "$signal") exit_code=$code"
+			else
+				warn "the listener ended with an error exit_code=$code"
+			fi
+			exit "$code"
+			;;
+		esac
+		if [ -n "$stop" ]; then
+			note "stopped before the listener was relaunched"
+			exit 0
+		fi
+	done
+}
+
 need python3
 need setpriv
 
@@ -382,11 +462,12 @@ esac
 # starts from it with no config.sh, takes one job and exits. It is never reused, so a `.runner` an earlier start
 # left behind does not make it "already registered"; its labels are part of the
 # configuration, so there is no label upkeep. The listener writes the identity
-# files from the configuration each time it starts, so those an earlier start
-# wrote are removed first.
+# files from the configuration each time it starts, so run_listener removes those
+# an earlier launch wrote before each one. The listener exits 0 after its job,
+# which ends this script, so it never takes a second one.
 #
 # The configuration reaches the listener as ACTIONS_RUNNER_INPUT_JITCONFIG, which
-# the runner reads exactly as it reads `run.sh --jitconfig`, and then clears from
+# the runner reads exactly as it reads `--jitconfig`, and then clears from
 # its own environment. Never on a command line: a process's arguments are visible
 # to every user of the machine, its environment only to its own account and root.
 # It is exported by this shell, not set through `env`, so no argument list ever
@@ -395,12 +476,10 @@ if [ "$mode" = jit ]; then
 	registration=$(printf '%s' "$credential" | jit_registration) || exit 1
 	runner_name=$(printf '%s\n' "$registration" | sed -n 1p)
 	jitconfig=$(printf '%s\n' "$registration" | sed -n 2p)
-	rm -f .runner .credentials .credentials_rsaparams
 	ACTIONS_RUNNER_INPUT_JITCONFIG=$jitconfig
 	export ACTIONS_RUNNER_INPUT_JITCONFIG
 	note "starting the just-in-time listener name=$runner_name dir=$work_dir"
-	exec setpriv --reuid="$service_user" --regid="$service_user" --init-groups \
-		env HOME="$work_dir" ./run.sh
+	run_listener
 fi
 
 need curl
@@ -472,5 +551,4 @@ else
 fi
 
 note "starting the listener name=$runner_name dir=$work_dir"
-exec setpriv --reuid="$service_user" --regid="$service_user" --init-groups \
-	env HOME="$work_dir" ./run.sh
+run_listener
