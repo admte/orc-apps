@@ -16,4 +16,9 @@ the job from a proxy on loopback that passes its other calls to GitLab unchanged
 never holds the runner token, only the job's own token. The exit status is the job's outcome: 0
 success, 1 failed, 2 canceled, 3 ended on GitLab's side.
 
+A certificate given as `ca` is added to the system's trust store and stays trusted by every program
+on the machine, also after it is removed from `ca`, until the machine is rebuilt. A job can reach
+the loopback proxy; it serves the job nothing beyond what the job's own token already allows.
+Stopping lets the job in flight finish, then ends whatever jobs left running.
+
 Runs on Linux (amd64, arm64).
