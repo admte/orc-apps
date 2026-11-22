@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -31,6 +33,7 @@ type handover struct {
 	dir      string
 	user     string
 	home     string
+	jobUID   int           // uid of user; 0 when unknown
 	grace    time.Duration // how long the runner has to exit once GitLab gave a verdict
 	killWait time.Duration // how long an ended runner has before it is killed
 	now      func() time.Time
@@ -58,21 +61,31 @@ type proxy struct {
 	ended   bool
 	idle    bool
 
-	putPath   string
-	tracePath string
+	jobPath string // /api/v4/jobs/{id}: the job's own endpoint and the root of its others
 }
+
+// inboundKey carries the runner's own request to ModifyResponse.
+type inboundKey struct{}
 
 func newProxy(j *job, upstream *url.URL, transport http.RoundTripper, events chan<- event) *proxy {
 	p := &proxy{
-		job:       j,
-		events:    events,
-		putPath:   "/api/v4/jobs/" + strconv.FormatInt(j.id, 10),
-		tracePath: "/api/v4/jobs/" + strconv.FormatInt(j.id, 10) + "/trace",
+		job:     j,
+		events:  events,
+		jobPath: "/api/v4/jobs/" + strconv.FormatInt(j.id, 10),
 	}
 	p.reverse = &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(upstream)
 			// SetURL joins the query of both; the upstream has none.
+			r.Out = r.Out.WithContext(context.WithValue(r.Out.Context(), inboundKey{}, r.In))
+		},
+		// Read before the answer is passed on, so the supervisor has GitLab's
+		// word on the job before the runner can act on it.
+		ModifyResponse: func(resp *http.Response) error {
+			if in, ok := resp.Request.Context().Value(inboundKey{}).(*http.Request); ok {
+				p.observe(in.Method, in.URL.Path, resp.StatusCode, resp.Header.Get("Job-Status"))
+			}
+			return nil
 		},
 		Transport:     transport,
 		FlushInterval: -1,
@@ -137,35 +150,31 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(rec, body)
 	default:
 		p.reverse.ServeHTTP(rec, r)
-		p.observe(r, rec)
 	}
 	logger.Printf("%s %s %d %dms", r.Method, redact(r.URL.Path), rec.status(), time.Since(start).Milliseconds())
 }
 
-// observe reads GitLab's word on the job from the answer to one of the
-// runner's own calls for it. The verdict is the last final Job-Status answered
-// to the runner's PUT of the job (a 202 "running" may come first). A 403 to
-// that PUT or to a trace PATCH before any verdict means GitLab ended the job;
-// one after a verdict is ignored.
-func (p *proxy) observe(r *http.Request, rec *recorder) {
-	isPut := r.Method == http.MethodPut && r.URL.Path == p.putPath
-	isTrace := r.Method == http.MethodPatch && r.URL.Path == p.tracePath
-	if !isPut && !isTrace {
+// observe reads GitLab's word on the job from its answer to one of the
+// runner's calls. The verdict is the final Job-Status of the last 2xx answer to
+// the runner's PUT of the job (a 202 "running" may come first). A 403 on any of
+// the job's own endpoints before a verdict means GitLab ended the job, whatever
+// Job-Status it carries; one after a verdict is ignored.
+func (p *proxy) observe(method, path string, status int, jobStatus string) {
+	ownJob := path == p.jobPath || strings.HasPrefix(path, p.jobPath+"/")
+	if !ownJob {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if isPut {
-		if _, final := verdictCodes[rec.jobStatus]; final {
-			if p.verdict != rec.jobStatus {
-				p.verdict = rec.jobStatus
-				logger.Printf("GitLab's verdict on the job job=%d status=%s", p.job.id, p.verdict)
-				p.events <- event{verdict: p.verdict}
-			}
-			return
+	if method == http.MethodPut && path == p.jobPath && status >= 200 && status < 300 {
+		if _, final := verdictCodes[jobStatus]; final && p.verdict != jobStatus {
+			p.verdict = jobStatus
+			logger.Printf("GitLab's verdict on the job job=%d status=%s", p.job.id, p.verdict)
+			p.events <- event{verdict: p.verdict}
 		}
+		return
 	}
-	if rec.status() == http.StatusForbidden && p.verdict == "" && !p.ended {
+	if status == http.StatusForbidden && p.verdict == "" && !p.ended {
 		p.ended = true
 		logger.Printf("GitLab refused the job's token before a verdict; the job ended on GitLab's side job=%d", p.job.id)
 		p.events <- event{ended: true}
@@ -193,18 +202,16 @@ func drain(r *http.Request) {
 	_ = r.Body.Close()
 }
 
-// recorder notes the status and Job-Status sent to the runner and passes
+// recorder notes the status sent to the runner and passes
 // everything else, flushes included, straight through.
 type recorder struct {
 	http.ResponseWriter
-	code      int
-	jobStatus string
+	code int
 }
 
 func (r *recorder) WriteHeader(code int) {
 	if r.code == 0 {
 		r.code = code
-		r.jobStatus = r.Header().Get("Job-Status")
 	}
 	r.ResponseWriter.WriteHeader(code)
 }
@@ -284,9 +291,40 @@ func (h *handover) supervise(pid int, exited <-chan error, events <-chan event, 
 	var graceC <-chan time.Time
 	verdict := ""
 	var stopping syscall.Signal
+	// apply takes one event; it returns the exit code once the job is decided.
+	apply := func(ev event) (int, bool) {
+		switch {
+		case ev.ended:
+			return exitEnded, true
+		case ev.idle:
+			return exitFailed, true
+		}
+		if verdict == "" {
+			// SIGQUIT: the runner finishes what it is doing for the job,
+			// then exits.
+			_ = syscall.Kill(pid, syscall.SIGQUIT)
+			graceC = time.After(h.grace)
+		}
+		verdict = ev.verdict
+		return 0, false
+	}
 	for {
 		select {
 		case err := <-exited:
+			// What GitLab said before the runner exited decides, though the
+			// exit may be seen first.
+			for drained := false; !drained; {
+				select {
+				case ev := <-events:
+					if code, done := apply(ev); done {
+						h.endJob()
+						return code
+					}
+				default:
+					drained = true
+				}
+			}
+			h.endJob()
 			switch {
 			case verdict != "":
 				logger.Printf("runner exited; job outcome %s", verdict)
@@ -298,34 +336,25 @@ func (h *handover) supervise(pid int, exited <-chan error, events <-chan event, 
 			logger.Printf("runner exited before GitLab gave a verdict on the job status=%s", exitText(err))
 			return exitFailed
 		case ev := <-events:
-			if ev.ended {
+			if code, done := apply(ev); done {
 				h.end(pid, exited)
-				return exitEnded
+				return code
 			}
-			if ev.idle {
-				h.end(pid, exited)
-				return exitFailed
-			}
-			if verdict == "" {
-				// SIGQUIT: the runner finishes what it is doing for the job,
-				// then exits.
-				_ = syscall.Kill(pid, syscall.SIGQUIT)
-				graceC = time.After(h.grace)
-			}
-			verdict = ev.verdict
 		case <-graceC:
 			logger.Printf("runner did not exit after the verdict; ending it")
 			h.end(pid, exited)
 			return verdictCodes[verdict]
 		case <-deadline.C:
-			logger.Printf("job passed its deadline; ending the runner job=%d", h.job.id)
 			h.end(pid, exited)
+			if verdict != "" {
+				return verdictCodes[verdict]
+			}
+			logger.Printf("job passed its deadline; ended the runner job=%d", h.job.id)
 			return exitFailed
 		case sig := <-sigs:
-			s := sig.(syscall.Signal)
 			// To the runner alone: it ends its job its own way (SIGQUIT lets
-			// it finish).
-			// The runner's exit, or a verdict that comes meanwhile, still decides.
+			// it finish). Its exit, or a verdict that comes meanwhile, decides.
+			s := sig.(syscall.Signal)
 			logger.Printf("stop signal %s; passing it to the runner", s)
 			stopping = s
 			_ = syscall.Kill(pid, s)
@@ -333,7 +362,8 @@ func (h *handover) supervise(pid int, exited <-chan error, events <-chan event, 
 	}
 }
 
-// end stops the runner's process group, killing it if it lingers.
+// end stops the runner's process group, killing it if it lingers, then
+// whatever the job left behind.
 func (h *handover) end(pid int, exited <-chan error) {
 	_ = syscall.Kill(-pid, syscall.SIGTERM)
 	select {
@@ -342,8 +372,53 @@ func (h *handover) end(pid int, exited <-chan error) {
 		_ = syscall.Kill(-pid, syscall.SIGKILL)
 		<-exited
 	}
-	// Whatever the job started and left in the group goes too.
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
+	h.endJob()
+}
+
+// endJob kills every process of the account jobs run as. A job runs through su,
+// which puts it in a session of its own: neither the runner's process group nor
+// the service's cgroup holds it, so a job's leftovers would outlive the runner.
+func (h *handover) endJob() {
+	if h.jobUID > 0 {
+		killUser(h.jobUID)
+	}
+}
+
+// killUser sends SIGKILL to every process whose real or effective uid is uid,
+// a few passes over, for processes forked meanwhile. Never root's.
+func killUser(uid int) {
+	if uid <= 0 {
+		return
+	}
+	want := strconv.Itoa(uid)
+	for pass := 0; pass < 3; pass++ {
+		entries, err := os.ReadDir("/proc")
+		if err != nil {
+			return
+		}
+		found := false
+		for _, e := range entries {
+			pid, err := strconv.Atoi(e.Name())
+			if err != nil {
+				continue
+			}
+			status, err := os.ReadFile("/proc/" + e.Name() + "/status")
+			if err != nil {
+				continue
+			}
+			for _, line := range strings.Split(string(status), "\n") {
+				if f := strings.Fields(line); len(f) >= 3 && f[0] == "Uid:" && (f[1] == want || f[2] == want) {
+					_ = syscall.Kill(pid, syscall.SIGKILL)
+					found = true
+				}
+			}
+		}
+		if !found {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func exitText(err error) string {

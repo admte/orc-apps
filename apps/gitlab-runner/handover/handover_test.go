@@ -126,8 +126,11 @@ func newFakeGitLab(t *testing.T, extra http.HandlerFunc) *fakeGitLab {
 		case r.Method == http.MethodPatch && r.URL.Path == "/api/v4/jobs/42/trace":
 			f.mu.Lock()
 			code := 202
-			if len(f.putCode) > 0 && f.putJS[0] == "trace" {
+			if len(f.putCode) > 0 && strings.HasPrefix(f.putJS[0], "trace") {
 				code = f.putCode[0]
+				if js, ok := strings.CutPrefix(f.putJS[0], "trace:"); ok {
+					w.Header().Set("Job-Status", js)
+				}
 				f.putCode, f.putJS = f.putCode[1:], f.putJS[1:]
 			}
 			f.mu.Unlock()
@@ -786,5 +789,97 @@ func TestRunnerAskingForMoreWorkWithoutVerdict(t *testing.T) {
 	code, _ := superviseWith(t, testJob(t), pid, exited, ev, make(chan os.Signal))
 	if code != exitFailed || alive(pid) {
 		t.Fatalf("exit %d, runner alive %v", code, alive(pid))
+	}
+}
+
+func TestForbiddenWithAFinalJobStatusIsNoVerdict(t *testing.T) {
+	// GitLab sets Job-Status on its 403s too; only a 2xx answer is a verdict.
+	for _, via := range []string{"put", "trace", "artifacts"} {
+		t.Run(via, func(t *testing.T) {
+			captureLog(t)
+			f := newFakeGitLab(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Job-Status", "success")
+				w.WriteHeader(http.StatusForbidden)
+			})
+			srv, events := startProxy(t, testJob(t), f.srv.URL)
+			switch via {
+			case "put":
+				f.script(403, "failed")
+				put(t, srv.URL)
+			case "trace":
+				f.script(403, "trace:canceled")
+				resp := do(t, http.MethodPatch, srv.URL+"/api/v4/jobs/42/trace", strings.NewReader("log"),
+					map[string]string{"JOB-TOKEN": jobToken, "Content-Range": "0-2"})
+				resp.Body.Close()
+			case "artifacts":
+				resp := do(t, http.MethodPost, srv.URL+"/api/v4/jobs/42/artifacts", strings.NewReader("zip"),
+					map[string]string{"JOB-TOKEN": jobToken})
+				resp.Body.Close()
+			}
+			if ev, ok := nextEvent(t, events); !ok || !ev.ended || ev.verdict != "" {
+				t.Fatalf("403 with Job-Status gave %+v, want ended", ev)
+			}
+		})
+	}
+}
+
+func TestEventIsQueuedBeforeTheRunnerSeesTheAnswer(t *testing.T) {
+	captureLog(t)
+	f := newFakeGitLab(t, nil)
+	srv, events := startProxy(t, testJob(t), f.srv.URL)
+	put(t, srv.URL)
+	select {
+	case ev := <-events:
+		if ev.verdict != "success" {
+			t.Fatalf("event %+v", ev)
+		}
+	default:
+		t.Fatal("the runner had the answer before the verdict was queued")
+	}
+}
+
+func TestPendingVerdictWinsOverTheRunnersExit(t *testing.T) {
+	captureLog(t)
+	for _, c := range []struct {
+		ev   event
+		want int
+	}{{event{verdict: "canceled"}, exitCanceled}, {event{ended: true}, exitEnded}} {
+		h := &handover{job: testJob(t), grace: time.Hour, killWait: time.Second, now: time.Now}
+		// Both are ready; whichever select picks, the verdict decides.
+		for range 20 {
+			e2, x2 := make(chan event, 1), make(chan error, 1)
+			e2 <- c.ev
+			x2 <- nil
+			if code := h.supervise(1<<22+1, x2, e2, make(chan os.Signal)); code != c.want {
+				t.Fatalf("exit %d, want %d", code, c.want)
+			}
+		}
+	}
+}
+
+func TestDeadlineKeepsAVerdictAlreadyIn(t *testing.T) {
+	captureLog(t)
+	started := time.Now().Add(-(60*time.Second + 15*time.Minute) + 300*time.Millisecond).UTC()
+	cred, err := parseCredential(testPayload(t, 42, 60, started.Format(time.RFC3339Nano)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-c", `trap "" QUIT; echo ready; sleep 60`)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	out, _ := cmd.StdoutPipe()
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(out, make([]byte, 6)); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	t.Cleanup(func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
+	events := make(chan event, 1)
+	events <- event{verdict: "success"}
+	h := &handover{job: cred.job, grace: time.Hour, killWait: time.Second, now: time.Now}
+	if code := h.supervise(cmd.Process.Pid, exited, events, make(chan os.Signal)); code != exitSuccess {
+		t.Fatalf("exit %d, want %d", code, exitSuccess)
 	}
 }
