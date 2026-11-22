@@ -27,8 +27,10 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"os/user"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -37,6 +39,7 @@ import (
 const usage = `Usage:
   gitlab-runner-handover start --job-file=PATH --url=URL [options]
   gitlab-runner-handover capture --runner=PATH [--dir=DIR]
+  gitlab-runner-handover end-jobs [--user=NAME]   kill every process of the job account
 
 start options:
   --job-file=PATH     file holding a runner token as {"mode":"persistent","token":"glrt-…"},
@@ -78,6 +81,8 @@ func main() {
 	switch os.Args[1] {
 	case "start":
 		code, err = cmdStart(os.Args[2:])
+	case "end-jobs":
+		err = cmdEndJobs(os.Args[2:])
 	case "capture":
 		err = cmdCapture(os.Args[2:], os.Stdout)
 	case "-h", "--help", "help":
@@ -272,7 +277,12 @@ func cmdStart(args []string) (int, error) {
 	if cred.job == nil {
 		return exitFailed, runPersistent(o, upstream, cred.token)
 	}
+	uid, err := lookupUID(o.user)
+	if err != nil {
+		return exitFailed, err
+	}
 	h := &handover{
+		jobUID:   uid,
 		job:      cred.job,
 		upstream: upstream,
 		caFile:   o.ca,
@@ -284,6 +294,36 @@ func cmdStart(args []string) (int, error) {
 		killWait: 10 * time.Second,
 	}
 	return h.run()
+}
+
+// lookupUID is the uid of the account jobs run as, which must not be root.
+func lookupUID(name string) (int, error) {
+	u, err := user.Lookup(name)
+	if err != nil {
+		return 0, fmt.Errorf("no account %s", name)
+	}
+	uid, err := strconv.Atoi(u.Uid)
+	if err != nil || uid <= 0 {
+		return 0, fmt.Errorf("jobs cannot run as %s", name)
+	}
+	return uid, nil
+}
+
+// cmdEndJobs kills whatever jobs left running: a job runs in a session of its
+// own, outside the runner's process group and the service's cgroup.
+func cmdEndJobs(args []string) error {
+	fs := flag.NewFlagSet("end-jobs", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	name := fs.String("user", "gitlab-runner", "")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	uid, err := lookupUID(*name)
+	if err != nil {
+		return err
+	}
+	killUser(uid)
+	return nil
 }
 
 // runPersistent writes the config of a runner that holds the runner token and

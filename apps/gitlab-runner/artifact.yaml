@@ -67,21 +67,27 @@ config:
     service: gitlab-runner
     command: ["./start-gitlab-runner.sh", "--url=${url}", "--job-file=${job_file}",
               "--ca-file=${ca_file}", "--ephemeral=${ephemeral}"]
-  # SIGQUIT is GitLab Runner's graceful stop: the job in flight finishes first.
-  # The hour is the cap on that wait.
+  # The command sends SIGQUIT, GitLab Runner's graceful stop, to the runner's
+  # main process alone and waits for the job in flight to finish; the hour caps
+  # that wait. Then it ends what jobs left running: a job runs through su in a
+  # session of its own, outside the service's processes. The service stop that
+  # follows (SIGQUIT to every process, a kill after `grace`) finds nothing.
   stop:
     signal: SIGQUIT
     timeout: 1h
     grace: 30s
-  # The config may hold a runner token; it goes however the runner stopped.
+    command: ["./stop-gitlab-runner.sh", "--pid=${pid}"]
+  # However the runner stopped: ends what jobs left running and removes the
+  # config, which may hold a runner token.
   stopped:
     timeout: 30s
     command: ["./stopped-gitlab-runner.sh"]
 files:
   - install-gitlab-runner.sh
   - start-gitlab-runner.sh
+  - stop-gitlab-runner.sh
   - stopped-gitlab-runner.sh
-  # Built from ./handover by scripts/build-gitlab-runner-handover.sh.
+  # Built from ./handover; scripts/build-gitlab-runner.sh rebuilds it, then the package.
   - path: gitlab-runner-handover-${arch}
 platforms:
   - os: linux
