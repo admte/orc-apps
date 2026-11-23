@@ -563,9 +563,15 @@ func (h *handover) supervise(pid int, exited <-chan error, events <-chan event, 
 			case verdict != "":
 				logger.Printf("runner exited; job outcome %s", verdict)
 				return end(endVerdict)
+			case stopping != 0 && !taken:
+				logger.Printf("runner stopped before taking a job")
+				return end(endStopped)
 			case stopping != 0:
 				logger.Printf("runner stopped before GitLab gave a verdict on the job")
 				return end(endStopped)
+			case !taken:
+				logger.Printf("runner exited before taking a job status=%s", exitText(err))
+				return end(endRunnerExit)
 			}
 			logger.Printf("runner exited before GitLab gave a verdict on the job status=%s", exitText(err))
 			return end(endRunnerExit)
