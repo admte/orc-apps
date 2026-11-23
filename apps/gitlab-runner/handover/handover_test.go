@@ -80,11 +80,17 @@ func testPayload(t *testing.T, id int64, timeout int, startedAt string) []byte {
 
 func testJob(t *testing.T) *job {
 	t.Helper()
-	cred, err := parseCredential(testPayload(t, 42, 3600, ""))
+	cred, err := parseCredential(envelope(t, testPayload(t, 42, 3600, "")))
 	if err != nil || cred.job == nil {
 		t.Fatalf("payload: %v", err)
 	}
 	return cred.job
+}
+
+// envelope wraps a job as the host supplies it.
+func envelope(t *testing.T, payload []byte) []byte {
+	t.Helper()
+	return []byte(`{"mode":"job","url":"https://gitlab.example","job":` + string(payload) + `}`)
 }
 
 // fakeGitLab answers the runner's calls for job 42 from a script of answers.
@@ -164,10 +170,7 @@ func startProxy(t *testing.T, j *job, upstream string) (*httptest.Server, chan e
 	if err != nil {
 		t.Fatal(err)
 	}
-	tr, err := newTransport("")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tr := newTransport()
 	events := make(chan event, 16)
 	srv := httptest.NewServer(newProxy(j, u, tr, events))
 	t.Cleanup(srv.Close)
@@ -568,7 +571,7 @@ func TestSuperviseDeadline(t *testing.T) {
 	captureLog(t)
 	// Taken long enough ago that take + timeout + 15 min is 200 ms from now.
 	started := time.Now().Add(-(60*time.Second + 15*time.Minute) + 200*time.Millisecond).UTC()
-	cred, err := parseCredential(testPayload(t, 42, 60, started.Format(time.RFC3339Nano)))
+	cred, err := parseCredential(envelope(t, testPayload(t, 42, 60, started.Format(time.RFC3339Nano))))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -584,13 +587,13 @@ func TestSuperviseDeadline(t *testing.T) {
 
 func TestDeadlineCountsFromTheTake(t *testing.T) {
 	now := time.Date(2026, 11, 21, 18, 0, 0, 0, time.UTC)
-	cred, _ := parseCredential(testPayload(t, 1, 600, "2026-11-21T17:36:51Z"))
+	cred, _ := parseCredential(envelope(t, testPayload(t, 1, 600, "2026-11-21T17:36:51Z")))
 	want := time.Date(2026, 11, 21, 18, 1, 51, 0, time.UTC)
 	if got := cred.job.deadline(now); !got.Equal(want) {
 		t.Fatalf("deadline %s, want %s", got, want)
 	}
 	// No take time: count from now.
-	cred, _ = parseCredential(testPayload(t, 1, 600, ""))
+	cred, _ = parseCredential(envelope(t, testPayload(t, 1, 600, "")))
 	if got := cred.job.deadline(now); !got.Equal(now.Add(25 * time.Minute)) {
 		t.Fatalf("deadline %s", got)
 	}
@@ -608,21 +611,42 @@ func TestSuperviseStopSignal(t *testing.T) {
 }
 
 func TestParseCredential(t *testing.T) {
-	cred, err := parseCredential([]byte(`{"mode":"persistent","token":"glrt-SECRETrunnertoken"}`))
-	if err != nil || cred.token != "glrt-SECRETrunnertoken" || cred.job != nil {
+	cred, err := parseCredential([]byte(` {"mode":"persistent","url":"https://gitlab.example","token":"glrt-SECRETrunnertoken"}`))
+	if err != nil || cred.mode != "persistent" || cred.token != "glrt-SECRETrunnertoken" || cred.url != "https://gitlab.example" || cred.job != nil {
 		t.Fatalf("persistent: %+v %v", cred, err)
 	}
+	// A value that is not a JSON object is a runner token, prefix or not.
+	for _, given := range []string{"glrt-SECRETrunnertoken\n", "  SECRETrunnertoken  "} {
+		cred, err = parseCredential([]byte(given))
+		if err != nil || cred.mode != "token" || cred.token != strings.TrimSpace(given) || cred.url != "" {
+			t.Fatalf("runner token: %+v %v", cred, err)
+		}
+	}
+	// The job's bytes are served exactly as the host supplied them.
+	payload := testPayload(t, 7, 60, "")
+	cred, err = parseCredential(envelope(t, payload))
+	if err != nil || cred.mode != "job" || cred.url != "https://gitlab.example" || cred.job.id != 7 || !bytes.Equal(cred.job.raw, payload) {
+		t.Fatalf("job: %+v %v", cred, err)
+	}
 	for _, bad := range []string{
-		`{"mode":"jit","token":"x"}`,
-		`{"mode":"persistent"}`,
-		`{"mode":"persistent","token":"a\nb"}`,
-		`{"id":1,"token":"x"}`,
-		`glrt-plain`,
+		``,
+		"glrt-SECRET runner",
+		"glrt-SECRET\nrunner",
+		`{"mode":"jit","url":"https://g.example","token":"x"}`,
+		`{"url":"https://g.example","token":"glrt-SECRETrunnertoken"}`,
+		`{"mode":"persistent","token":"glrt-SECRETrunnertoken"}`,
+		`{"mode":"persistent","url":"https://g.example"}`,
+		`{"mode":"persistent","url":"https://g.example","token":"a\nb"}`,
+		`{"mode":"job","url":"https://g.example"}`,
+		`{"mode":"job","url":"https://g.example","job":"x"}`,
+		`{"mode":"job","url":"https://g.example","job":{"id":1,"token":"x"}}`,
+		`{"mode":"job","job":` + string(payload) + `}`,
+		string(payload), // a bare job, with no envelope
 		`{`,
 	} {
 		if _, err := parseCredential([]byte(bad)); err == nil {
 			t.Errorf("accepted %q", bad)
-		} else if strings.Contains(err.Error(), "glrt-") || strings.Contains(err.Error(), `"x"`) {
+		} else if strings.Contains(err.Error(), "glrt-") || strings.Contains(err.Error(), "SECRET") || strings.Contains(err.Error(), `"x"`) {
 			t.Errorf("error repeats the credential: %v", err)
 		}
 	}
@@ -631,18 +655,28 @@ func TestParseCredential(t *testing.T) {
 func TestStartRefusesAMismatchedMode(t *testing.T) {
 	captureLog(t)
 	dir := t.TempDir()
-	file := filepath.Join(dir, "job")
-	for _, c := range []struct{ content, ephemeral string }{
-		{`{"mode":"persistent","token":"glrt-SECRETrunnertoken"}`, "true"},
-		{string(testPayload(t, 1, 60, "")), "false"},
+	file := filepath.Join(dir, "token")
+	for _, c := range []struct{ content, ephemeral, url string }{
+		{`{"mode":"persistent","url":"https://gitlab.example","token":"glrt-SECRETrunnertoken"}`, "true", ""},
+		{string(envelope(t, testPayload(t, 1, 60, ""))), "false", ""},
+		{`{"mode":"other","url":"https://gitlab.example"}`, "true", ""},
+		{"glrt-SECRETrunnertoken", "false", ""}, // a runner token needs --url
+		{"glrt-SECRETrunnertoken", "true", "ftp://gitlab.example"},
 	} {
 		if err := os.WriteFile(file, []byte(c.content), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		code, err := cmdStart([]string{"--job-file=" + file, "--url=https://gitlab.example", "--ephemeral=" + c.ephemeral,
-			"--dir=" + filepath.Join(dir, "run"), "--runner=/nonexistent"})
+		args := []string{"--token-file=" + file, "--ephemeral=" + c.ephemeral,
+			"--dir=" + filepath.Join(dir, "run"), "--runner=/nonexistent", "--user=root"}
+		if c.url != "" {
+			args = append(args, "--url="+c.url)
+		}
+		code, err := cmdStart(args)
 		if err == nil || code == 0 {
-			t.Errorf("ephemeral=%s accepted", c.ephemeral)
+			t.Errorf("%.30s ephemeral=%s accepted", c.content, c.ephemeral)
+		}
+		if err != nil && strings.Contains(err.Error(), "SECRET") {
+			t.Errorf("error repeats the credential: %v", err)
 		}
 	}
 }
@@ -860,7 +894,7 @@ func TestPendingVerdictWinsOverTheRunnersExit(t *testing.T) {
 func TestDeadlineKeepsAVerdictAlreadyIn(t *testing.T) {
 	captureLog(t)
 	started := time.Now().Add(-(60*time.Second + 15*time.Minute) + 300*time.Millisecond).UTC()
-	cred, err := parseCredential(testPayload(t, 42, 60, started.Format(time.RFC3339Nano)))
+	cred, err := parseCredential(envelope(t, testPayload(t, 42, 60, started.Format(time.RFC3339Nano))))
 	if err != nil {
 		t.Fatal(err)
 	}

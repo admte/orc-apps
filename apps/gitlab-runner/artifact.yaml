@@ -9,64 +9,56 @@ annotations:
 config:
   params:
     type: object
-    required: [url, token, job]
-    x-ui-order: [url, token, ca]
+    required: [url, token]
+    x-ui-order: [url, token]
     properties:
       url:
         type: string
         title: GitLab URL
         description: Address of the GitLab instance the runner belongs to
         placeholder: https://gitlab.com
-      # Read by the host to fill `job`; no command names it.
+      # A runner token, or a runner credential as a JSON object; the helper tells
+      # them apart by shape. Sensitive, so it reaches start only as
+      # ${token_file}, a path. `runtime`: the helper reads it as the runner
+      # starts.
       token:
         type: string
         title: Runner token
         description: Authentication token (glrt-) of a runner created in GitLab
         sensitive: true
-      ca:
-        type: string
-        title: CA certificate
-        description: PEM certificate GitLab's address is signed by, when no public CA signs it
-        contentMediaType: application/x-pem-file
-      ephemeral:
-        type: boolean
-        title: One job
-        description: Run one job handed to the runner, then exit
-        default: false
-        x-source:
-          kind: pool.on_demand
-      # Either {"mode":"persistent","token":"glrt-…"}, a runner that takes jobs
-      # until stopped, or one job as GitLab hands it to a runner. `runtime`: the
-      # helper reads it as the runner starts.
-      job:
-        type: string
-        title: Runner credential
-        description: Runner token as {"mode":"persistent","token":"glrt-…"}, or one job GitLab handed out
-        sensitive: true
         lifetime: runtime
         x-source:
-          kind: gitlab.job
+          kind: gitlab.runner
           params:
             url: url
-            token: token
-            ca: ca
           # What this runner build says of itself when it asks for a job,
           # captured from 19.6.0 with `gitlab-runner-handover capture`.
           settings:
             version: 19.6.0
             revision: 9e4c6b50
             features: '{"variables":true,"image":false,"services":false,"artifacts":true,"cache":true,"fallback_cache_keys":true,"shared":true,"upload_multiple_artifacts":true,"upload_raw_artifacts":true,"session":true,"terminal":true,"refspecs":true,"masking":true,"proxy":false,"raw_variables":true,"artifacts_exclude":true,"multi_build_steps":true,"trace_reset":true,"trace_checksum":true,"trace_size":true,"vault_secrets":true,"cancelable":true,"return_exit_code":true,"service_variables":false,"service_multiple_aliases":false,"image_executor_opts":false,"service_executor_opts":false,"cancel_gracefully":true,"native_steps_integration":true,"two_phase_job_commit":true,"job_inputs":true}'
+      # Supplied by the host, never typed by an operator. A runner token takes
+      # either value; a JSON credential names the one it needs.
+      ephemeral:
+        type: boolean
+        title: One job
+        description: Take one job, then exit
+        default: false
+        x-source:
+          kind: pool.on_demand
   # Downloads the pinned runner and creates the account jobs run as. Writes no
   # runner configuration: an installed disk may be copied to other machines.
   install:
     command: ["./install-gitlab-runner.sh", "--arch=${arch}"]
-  # The helper reads the credential, writes config.toml into a root-only
-  # directory under /run and becomes the runner (a runner token), or serves the
-  # one job to the runner from loopback and exits with the job's outcome.
+  # The helper reads the token, writes config.toml into a root-only directory
+  # under /run and becomes the runner, which takes jobs until it is stopped. For
+  # one job it supervises the runner instead: the runner takes its job from
+  # GitLab, or is served a supplied one from loopback, and the helper exits once
+  # the job is over.
   start:
     service: gitlab-runner
-    command: ["./start-gitlab-runner.sh", "--url=${url}", "--job-file=${job_file}",
-              "--ca-file=${ca_file}", "--ephemeral=${ephemeral}"]
+    command: ["./start-gitlab-runner.sh", "--url=${url}", "--token-file=${token_file}",
+              "--ephemeral=${ephemeral}"]
   # The command sends SIGQUIT, GitLab Runner's graceful stop, to the runner's
   # main process alone and waits for the job in flight to finish; the hour caps
   # that wait. Then it ends what jobs left running: a job runs through su in a

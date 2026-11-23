@@ -1,13 +1,22 @@
-// Command gitlab-runner-handover starts a stock gitlab-runner for one of two
-// credentials:
+// Command gitlab-runner-handover starts a stock gitlab-runner for the value in
+// the token file, told apart by its shape. A value whose first non-blank
+// character is `{` is a credential the host supplies; anything else is a runner
+// token.
 //
-//   - {"mode":"persistent","token":"glrt-…"}: a runner token. It writes the
-//     runner's config.toml and replaces itself with `gitlab-runner run`, a
-//     runner that takes jobs until it is stopped.
-//   - a job as GitLab hands it to a runner (the answer to POST
-//     /api/v4/jobs/request): it serves that job to `gitlab-runner run`
-//     from a proxy on loopback, ends the runner once the job is over, and exits
-//     with the job's outcome: 0 success, 1 failed, 2 canceled, 3 ended by GitLab.
+//   - {"mode":"persistent","url":…,"token":…}: a runner token for the GitLab at
+//     url. It writes the runner's config.toml and replaces itself with
+//     `gitlab-runner run`, a runner that takes jobs until it is stopped.
+//   - {"mode":"job","url":…,"job":{…}}: one job as GitLab at url handed it to a
+//     runner. It serves that job to the runner from a proxy on loopback, ends
+//     the runner once the job is over, and exits with the job's outcome: 0
+//     success, 1 failed, 2 canceled, 3 ended by GitLab.
+//   - A runner token, with --ephemeral=false: as persistent, against --url.
+//   - A runner token, with --ephemeral=true: the runner takes exactly one job
+//     straight from GitLab through the same proxy, which passes its job
+//     requests upstream until one answers with a job and answers every later
+//     one itself. It prints the job's outcome and exits 0 once the job is over,
+//     however it ended; it exits 1 only when GitLab refuses the token or the
+//     runner cannot start.
 //
 // `capture` prints what the runner build says of itself when it asks for a job
 // (version, revision, features), and takes no job.
@@ -37,16 +46,16 @@ import (
 )
 
 const usage = `Usage:
-  gitlab-runner-handover start --job-file=PATH --url=URL [options]
+  gitlab-runner-handover start --token-file=PATH [--url=URL] [options]
   gitlab-runner-handover capture --runner=PATH [--dir=DIR]
   gitlab-runner-handover end-jobs [--user=NAME]   kill every process of the job account
 
 start options:
-  --job-file=PATH     file holding a runner token as {"mode":"persistent","token":"glrt-…"},
-                      or one job as GitLab hands it to a runner
-  --url=URL           GitLab's address, http or https
-  --ca=PATH           PEM file of extra trust anchors for --url (optional)
-  --ephemeral=BOOL    true for a job, false for a runner token (default false)
+  --token-file=PATH   file holding a runner token, {"mode":"persistent","url":…,"token":…}
+                      or {"mode":"job","url":…,"job":{…}}
+  --url=URL           GitLab's address, http or https; for a runner token only
+  --ephemeral=BOOL    true for one job, false for a runner that takes jobs until
+                      stopped (default false)
   --runner=PATH       the gitlab-runner binary (default /usr/local/bin/gitlab-runner)
   --dir=DIR           root-only directory for config.toml (default /run/gitlab-runner)
   --state-dir=DIR     where this machine's runner system id is kept
@@ -54,7 +63,9 @@ start options:
   --user=NAME         account jobs run as (default gitlab-runner)
   --home=DIR          that account's working directory (default /home/gitlab-runner)
 
-Exit status of a job: 0 success, 1 failed, 2 canceled, 3 ended by GitLab.
+Exit status of a supplied job: 0 success, 1 failed, 2 canceled, 3 ended by GitLab.
+Exit status of one job taken with a runner token: 0 once the job is over, 1 when
+GitLab refuses the token or the runner cannot start.
 `
 
 // Exit codes of a handed-over job.
@@ -100,9 +111,8 @@ func main() {
 }
 
 type startOptions struct {
-	jobFile   string
+	tokenFile string
 	url       string
-	ca        string
 	ephemeral string
 	runner    string
 	dir       string
@@ -115,9 +125,8 @@ func parseStart(args []string) (startOptions, error) {
 	var o startOptions
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.StringVar(&o.jobFile, "job-file", "", "")
+	fs.StringVar(&o.tokenFile, "token-file", "", "")
 	fs.StringVar(&o.url, "url", "", "")
-	fs.StringVar(&o.ca, "ca", "", "")
 	fs.StringVar(&o.ephemeral, "ephemeral", "false", "")
 	fs.StringVar(&o.runner, "runner", "/usr/local/bin/gitlab-runner", "")
 	fs.StringVar(&o.dir, "dir", "/run/gitlab-runner", "")
@@ -130,8 +139,8 @@ func parseStart(args []string) (startOptions, error) {
 	if fs.NArg() > 0 {
 		return o, fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}
-	if o.jobFile == "" {
-		return o, errors.New("--job-file is required")
+	if o.tokenFile == "" {
+		return o, errors.New("--token-file is required")
 	}
 	switch o.ephemeral {
 	case "":
@@ -143,10 +152,12 @@ func parseStart(args []string) (startOptions, error) {
 	return o, nil
 }
 
-// credential is what the job file holds: a runner token or one job.
+// credential is what the token file holds.
 type credential struct {
-	token string // persistent: the runner token
-	job   *job   // a handed-over job
+	mode  string // "token" (a runner token as given), "persistent" or "job"
+	url   string // GitLab's address, from a supplied credential; "" for a runner token
+	token string // the runner token: given, or of a persistent credential
+	job   *job   // a supplied job
 }
 
 // job is what the proxy needs of GitLab's job payload; raw is served unchanged.
@@ -158,35 +169,54 @@ type job struct {
 	startedAt time.Time // zero when the payload does not say
 }
 
+// parseCredential reads the token file's value by its shape: a value whose
+// first non-blank character is `{` is a supplied credential, anything else a
+// runner token. No error repeats any of the value.
 func parseCredential(raw []byte) (credential, error) {
-	var head struct {
-		Mode  *string `json:"mode"`
-		Token *string `json:"token"`
-	}
 	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || trimmed[0] != '{' {
-		return credential{}, errors.New("the job file does not hold a JSON object")
+	if len(trimmed) == 0 {
+		return credential{}, errors.New("the token file is empty")
 	}
-	if err := json.Unmarshal(trimmed, &head); err != nil {
-		return credential{}, errors.New("the job file is not valid JSON")
-	}
-	if head.Mode != nil {
-		if *head.Mode != "persistent" {
-			return credential{}, fmt.Errorf("credential mode %q is not supported by this version", *head.Mode)
+	if trimmed[0] != '{' {
+		if bytes.ContainsFunc(trimmed, func(r rune) bool { return r <= ' ' || r == 0x7f }) {
+			return credential{}, errors.New("the runner token contains a space or a control character")
 		}
-		if head.Token == nil || *head.Token == "" {
+		return credential{mode: "token", token: string(trimmed)}, nil
+	}
+	var env struct {
+		Mode  *string         `json:"mode"`
+		URL   string          `json:"url"`
+		Token string          `json:"token"`
+		Job   json.RawMessage `json:"job"`
+	}
+	if err := json.Unmarshal(trimmed, &env); err != nil {
+		return credential{}, errors.New("the credential is not valid JSON")
+	}
+	if env.Mode == nil {
+		return credential{}, errors.New("the credential names no mode")
+	}
+	switch *env.Mode {
+	case "persistent", "job":
+	default:
+		return credential{}, fmt.Errorf("credential mode %q is not supported by this version", *env.Mode)
+	}
+	if env.URL == "" {
+		return credential{}, fmt.Errorf("the %s credential has no url", *env.Mode)
+	}
+	if *env.Mode == "persistent" {
+		if env.Token == "" {
 			return credential{}, errors.New("the persistent credential has no token")
 		}
-		if strings.ContainsAny(*head.Token, "\r\n") {
-			return credential{}, errors.New("the persistent credential's token contains a line break")
+		if strings.ContainsFunc(env.Token, func(r rune) bool { return r <= ' ' || r == 0x7f }) {
+			return credential{}, errors.New("the persistent credential's token contains a space or a control character")
 		}
-		return credential{token: *head.Token}, nil
+		return credential{mode: "persistent", url: env.URL, token: env.Token}, nil
 	}
-	j, err := parseJob(trimmed)
+	j, err := parseJob(env.Job)
 	if err != nil {
 		return credential{}, err
 	}
-	return credential{job: j}, nil
+	return credential{mode: "job", url: env.URL, job: j}, nil
 }
 
 func parseJob(raw []byte) (*job, error) {
@@ -202,11 +232,14 @@ func parseJob(raw []byte) (*job, error) {
 			Value string `json:"value"`
 		} `json:"variables"`
 	}
+	if len(raw) == 0 || raw[0] != '{' {
+		return nil, errors.New("the job credential holds no job")
+	}
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, errors.New("the job is not valid JSON")
 	}
 	if p.ID == nil || p.Token == "" || len(p.JobInfo) == 0 {
-		return nil, errors.New("the job file holds neither a persistent credential nor a job (id, token, job_info)")
+		return nil, errors.New("the job credential's job lacks an id, token or job_info")
 	}
 	j := &job{raw: append([]byte(nil), raw...), id: *p.ID, token: p.Token, timeout: time.Hour}
 	if p.RunnerInfo.Timeout > 0 {
@@ -233,13 +266,13 @@ func (j *job) deadline(now time.Time) time.Time {
 	return start.Add(j.timeout + 15*time.Minute)
 }
 
-func parseBaseURL(raw string) (*url.URL, error) {
+func parseBaseURL(raw, what string) (*url.URL, error) {
 	u, err := url.Parse(strings.TrimRight(raw, "/"))
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		return nil, errors.New("--url must be an http or https address")
+		return nil, fmt.Errorf("%s must be an http or https address", what)
 	}
 	if u.RawQuery != "" || u.Fragment != "" || u.User != nil {
-		return nil, errors.New("--url must carry no query, fragment or user")
+		return nil, fmt.Errorf("%s must carry no query, fragment or user", what)
 	}
 	return u, nil
 }
@@ -249,23 +282,32 @@ func cmdStart(args []string) (int, error) {
 	if err != nil {
 		return 64, err
 	}
-	upstream, err := parseBaseURL(o.url)
+	raw, err := os.ReadFile(o.tokenFile)
 	if err != nil {
-		return 64, err
-	}
-	raw, err := os.ReadFile(o.jobFile)
-	if err != nil {
-		return exitFailed, errors.New("cannot read the job file")
+		return exitFailed, errors.New("cannot read the token file")
 	}
 	cred, err := parseCredential(raw)
 	clear(raw)
 	if err != nil {
 		return exitFailed, err
 	}
+	// A supplied credential names its GitLab; --url is for a runner token.
+	var upstream *url.URL
+	if cred.mode == "token" {
+		if o.url == "" {
+			return 64, errors.New("--url is required with a runner token")
+		}
+		upstream, err = parseBaseURL(o.url, "--url")
+	} else {
+		upstream, err = parseBaseURL(cred.url, "the credential's url")
+	}
+	if err != nil {
+		return exitFailed, err
+	}
 	switch {
-	case cred.job == nil && o.ephemeral == "true":
-		return exitFailed, errors.New("a runner token runs a runner that takes jobs until stopped; start it with --ephemeral=false, or supply a job")
-	case cred.job != nil && o.ephemeral == "false":
+	case cred.mode == "persistent" && o.ephemeral == "true":
+		return exitFailed, errors.New("a persistent credential runs a runner that takes jobs until stopped; start it with --ephemeral=false")
+	case cred.mode == "job" && o.ephemeral == "false":
 		return exitFailed, errors.New("a job is run once; start it with --ephemeral=true")
 	}
 	if err := os.MkdirAll(o.dir, 0o700); err != nil {
@@ -274,7 +316,7 @@ func cmdStart(args []string) (int, error) {
 	if err := os.Chmod(o.dir, 0o700); err != nil {
 		return exitFailed, err
 	}
-	if cred.job == nil {
+	if cred.job == nil && o.ephemeral == "false" {
 		return exitFailed, runPersistent(o, upstream, cred.token)
 	}
 	uid, err := lookupUID(o.user)
@@ -285,13 +327,21 @@ func cmdStart(args []string) (int, error) {
 		jobUID:   uid,
 		job:      cred.job,
 		upstream: upstream,
-		caFile:   o.ca,
 		runner:   o.runner,
 		dir:      o.dir,
 		user:     o.user,
 		home:     o.home,
 		grace:    30 * time.Second,
 		killWait: 10 * time.Second,
+	}
+	if cred.job == nil {
+		// Direct: the runner's own token, and one system id per machine as
+		// for a runner that takes jobs until stopped.
+		h.direct = true
+		h.token = cred.token
+		if err := ensureSystemID(o.stateDir, o.dir); err != nil {
+			return exitFailed, err
+		}
 	}
 	return h.run()
 }
