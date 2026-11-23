@@ -1,0 +1,88 @@
+artifactType: application/vnd.orc8r.app.v2
+annotations:
+  org.opencontainers.image.title: gitlab-runner
+  # The GitLab Runner release install downloads; a new release is a new version
+  # with its features captured again (handover capture).
+  org.opencontainers.image.version: 19.6.0
+  org.opencontainers.image.description: GitLab Runner with the shell executor
+  org.opencontainers.image.source: https://gitlab.com/gitlab-org/gitlab-runner
+config:
+  params:
+    type: object
+    required: [url, token]
+    x-ui-order: [url, token]
+    properties:
+      url:
+        type: string
+        title: GitLab URL
+        description: Address of the GitLab instance the runner belongs to
+        placeholder: https://gitlab.com
+      # A runner token, or a runner credential as a JSON object; the helper tells
+      # them apart by shape. Sensitive, so it reaches start only as
+      # ${token_file}, a path. `runtime`: the helper reads it as the runner
+      # starts.
+      token:
+        type: string
+        title: Runner token
+        description: Authentication token (glrt-) of a runner created in GitLab
+        sensitive: true
+        lifetime: runtime
+        x-source:
+          kind: gitlab.runner
+          params:
+            url: url
+          # What this runner build says of itself when it asks for a job,
+          # captured from 19.6.0 with `gitlab-runner-handover capture`.
+          settings:
+            version: 19.6.0
+            revision: 9e4c6b50
+            features: '{"variables":true,"image":false,"services":false,"artifacts":true,"cache":true,"fallback_cache_keys":true,"shared":true,"upload_multiple_artifacts":true,"upload_raw_artifacts":true,"session":true,"terminal":true,"refspecs":true,"masking":true,"proxy":false,"raw_variables":true,"artifacts_exclude":true,"multi_build_steps":true,"trace_reset":true,"trace_checksum":true,"trace_size":true,"vault_secrets":true,"cancelable":true,"return_exit_code":true,"service_variables":false,"service_multiple_aliases":false,"image_executor_opts":false,"service_executor_opts":false,"cancel_gracefully":true,"native_steps_integration":true,"two_phase_job_commit":true,"job_inputs":true}'
+      # Supplied by the host, never typed by an operator. A runner token takes
+      # either value; a JSON credential names the one it needs.
+      ephemeral:
+        type: boolean
+        title: One job
+        description: Take one job, then exit
+        default: false
+        x-source:
+          kind: pool.on_demand
+  # Downloads the pinned runner and creates the account jobs run as. Writes no
+  # runner configuration: an installed disk may be copied to other machines.
+  install:
+    command: ["./install-gitlab-runner.sh", "--arch=${arch}"]
+  # The helper reads the token, writes config.toml into a root-only directory
+  # under /run and becomes the runner, which takes jobs until it is stopped. For
+  # one job it supervises the runner instead: the runner takes its job from
+  # GitLab, or is served a supplied one from loopback, and the helper exits once
+  # the job is over.
+  start:
+    service: gitlab-runner
+    command: ["./start-gitlab-runner.sh", "--url=${url}", "--token-file=${token_file}",
+              "--ephemeral=${ephemeral}"]
+  # The command sends SIGQUIT, GitLab Runner's graceful stop, to the runner's
+  # main process alone and waits for the job in flight to finish; the hour caps
+  # that wait. Then it ends what jobs left running: a job runs through su in a
+  # session of its own, outside the service's processes. The service stop that
+  # follows (SIGQUIT to every process, a kill after `grace`) finds nothing.
+  stop:
+    signal: SIGQUIT
+    timeout: 1h
+    grace: 30s
+    command: ["./stop-gitlab-runner.sh", "--pid=${pid}"]
+  # However the runner stopped: ends what jobs left running and removes the
+  # config, which may hold a runner token.
+  stopped:
+    timeout: 30s
+    command: ["./stopped-gitlab-runner.sh"]
+files:
+  - install-gitlab-runner.sh
+  - start-gitlab-runner.sh
+  - stop-gitlab-runner.sh
+  - stopped-gitlab-runner.sh
+  # Built from ./handover; scripts/build-gitlab-runner.sh rebuilds it, then the package.
+  - path: gitlab-runner-handover-${arch}
+platforms:
+  - os: linux
+    arch: amd64
+  - os: linux
+    arch: arm64
