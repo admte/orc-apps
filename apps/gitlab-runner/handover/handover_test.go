@@ -641,6 +641,8 @@ func TestParseCredential(t *testing.T) {
 		`{"mode":"job","url":"https://g.example","job":"x"}`,
 		`{"mode":"job","url":"https://g.example","job":{"id":1,"token":"x"}}`,
 		`{"mode":"job","job":` + string(payload) + `}`,
+		`{"mode":"persistent","url":"http://g.example","token":"glrt-SECRETrunnertoken"}`,
+		`{"mode":"job","url":"http://g.example","job":` + string(payload) + `}`,
 		string(payload), // a bare job, with no envelope
 		`{`,
 	} {

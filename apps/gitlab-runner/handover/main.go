@@ -198,10 +198,13 @@ func parseCredential(raw []byte) (credential, error) {
 	switch *env.Mode {
 	case "persistent", "job":
 	default:
-		return credential{}, fmt.Errorf("credential mode %q is not supported by this version", *env.Mode)
+		return credential{}, errors.New("the credential's mode is not supported by this version")
 	}
 	if env.URL == "" {
 		return credential{}, fmt.Errorf("the %s credential has no url", *env.Mode)
+	}
+	if !strings.HasPrefix(env.URL, "https://") {
+		return credential{}, fmt.Errorf("the %s credential's url must be https", *env.Mode)
 	}
 	if *env.Mode == "persistent" {
 		if env.Token == "" {
