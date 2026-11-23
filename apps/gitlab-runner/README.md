@@ -29,16 +29,21 @@ job requests to GitLab, one at a time, until one answers with a job, and answers
 with "no job". The machine prints the job's outcome and exits 0 once the job is over, however it
 ended (success, failed, canceled, ended on GitLab's side, or past its timeout), so that a failed CI
 job is not mistaken for a broken machine. It exits 1 only when GitLab refuses the token or the
-runner cannot start.
+runner cannot start; a runner that ends on its own before it has taken a job, without being asked
+to stop, counts as one that cannot start. A job whose answer from GitLab is cut off before the
+runner has it is lost: the machine says so and exits 0. A job the runner never touched is reported
+to GitLab as failed (`runner_system_failure`) as the machine ends, so GitLab does not hold it
+running.
 
 **One supplied job.** The job, exactly as GitLab handed it to a runner, is served to the runner by
 the same proxy, which passes the runner's other calls to GitLab unchanged. The machine never holds
 a runner token, only the job's own token. The exit status is the job's outcome: 0 success, 1
 failed, 2 canceled, 3 ended on GitLab's side.
 
-GitLab's certificate must chain to a root the system trusts. A job can reach the loopback proxy; it
-serves the job nothing beyond what the job's own token already allows. The runner's configuration,
-which may hold the runner token, is root-only and removed when the runner stops. Stopping lets the
-job in flight finish, then ends whatever jobs left running.
+GitLab's certificate must chain to a root the system trusts, and a JSON credential's `url` must be
+https. A job can reach the loopback proxy; it serves the job nothing beyond what the job's own token
+already allows. The runner's configuration, which may hold the runner token, is root-only and
+removed when the runner stops. Stopping lets the job in flight finish, then ends whatever jobs left
+running.
 
 Runs on Linux (amd64, arm64).

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -46,6 +47,7 @@ type directGitLab struct {
 	hold        time.Duration
 	gzip        bool
 	payload     []byte
+	puts        []string // bodies of the job's PUTs
 	srv         *httptest.Server
 }
 
@@ -111,6 +113,10 @@ func (g *directGitLab) serve(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
+		body, _ := io.ReadAll(r.Body)
+		g.mu.Lock()
+		g.puts = append(g.puts, string(body))
+		g.mu.Unlock()
 		w.Header().Set("Job-Status", verdict)
 		w.WriteHeader(http.StatusOK)
 	default:
@@ -350,6 +356,7 @@ func TestDirectExitCodes(t *testing.T) {
 		{"stopped during a job", []event{taken()}, true, 0},
 		{"stopped before a job", nil, true, 0},
 		{"token refused", []event{{refused: true}}, false, 1},
+		{"job lost", []event{{lost: true}}, false, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -441,7 +448,7 @@ func fakeRunner(args []string) int {
 		default:
 		}
 		resp, body := post(jobRequestPath, `{"token":"`+token+`"}`, nil)
-		if resp.StatusCode == http.StatusCreated {
+		if resp.StatusCode == http.StatusCreated && os.Getenv("HANDOVER_FAKE_RUNNER_DROP") != "1" {
 			var j struct {
 				ID    int64  `json:"id"`
 				Token string `json:"token"`
@@ -507,5 +514,111 @@ func TestDirectRunWithARefusedToken(t *testing.T) {
 	code, err := runDirect(t, g, runnerToken)
 	if err != nil || code != 1 {
 		t.Fatalf("exit %d %v, want 1", code, err)
+	}
+}
+
+func TestDirectRunFailsAJobTheRunnerNeverRan(t *testing.T) {
+	captureLog(t)
+	t.Setenv("HANDOVER_FAKE_RUNNER_DROP", "1")
+	g := newDirectGitLab(t, testPayload(t, 42, 600, ""))
+	code, err := runDirect(t, g, runnerToken)
+	if err != nil || code != 0 {
+		t.Fatalf("exit %d %v, want 0", code, err)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.puts) != 1 || !strings.Contains(g.puts[0], `"state":"failed"`) ||
+		!strings.Contains(g.puts[0], `"failure_reason":"runner_system_failure"`) {
+		t.Fatalf("GitLab was not told the job failed: %q", g.puts)
+	}
+}
+
+func TestDirectFailUntouchedOnlyForAnUntouchedJob(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		touch func(base string)
+		want  int
+	}{
+		{"untouched", func(string) {}, 1},
+		{"trace sent", func(base string) {
+			resp := do(t, http.MethodPatch, base+"/api/v4/jobs/42/trace", strings.NewReader("log"),
+				map[string]string{"JOB-TOKEN": jobToken, "Content-Range": "0-2"})
+			resp.Body.Close()
+		}, 0},
+		{"verdict seen", func(base string) { put(t, base) }, 1}, // the runner's own PUT only
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			captureLog(t)
+			g := newDirectGitLab(t, testPayload(t, 42, 600, ""))
+			u, _ := url.Parse(g.srv.URL)
+			p := newProxy(nil, u, newTransport(), make(chan event, 16))
+			srv := httptest.NewServer(p)
+			defer srv.Close()
+			askForJob(t, srv.URL, "")
+			c.touch(srv.URL)
+			p.failUntouched()
+			g.mu.Lock()
+			defer g.mu.Unlock()
+			if len(g.puts) != c.want {
+				t.Fatalf("PUTs %q, want %d", g.puts, c.want)
+			}
+		})
+	}
+}
+
+func TestDirectCutJobAnswerIsLostAndNoSecondRequestGoesUp(t *testing.T) {
+	captureLog(t)
+	var requests atomic.Int32
+	cut := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != jobRequestPath {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		requests.Add(1)
+		w.Header().Set("Content-Length", "100000")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":42,"tok`))
+		// The handler returns short of its Content-Length: the connection is cut.
+	}))
+	defer cut.Close()
+	srv, events := startProxy(t, nil, cut.URL)
+	resp, _ := askForJob(t, srv.URL, "")
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("cut answer: %d", resp.StatusCode)
+	}
+	if ev, ok := nextEvent(t, events); !ok || !ev.lost {
+		t.Fatalf("no lost event: %+v", ev)
+	}
+	for range 3 {
+		if resp, _ := askForJob(t, srv.URL, ""); resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("retry: %d", resp.StatusCode)
+		}
+	}
+	if n := requests.Load(); n != 1 {
+		t.Fatalf("GitLab saw %d job requests, want 1", n)
+	}
+}
+
+func TestDirectJobAnswerIsReadAfterTheRunnerGaveUp(t *testing.T) {
+	captureLog(t)
+	g := newDirectGitLab(t, testPayload(t, 42, 600, ""))
+	g.hold = 300 * time.Millisecond
+	srv, events := startProxy(t, nil, g.srv.URL)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+jobRequestPath, strings.NewReader(`{"token":"`+runnerToken+`"}`))
+	if _, err := http.DefaultClient.Do(req); err == nil {
+		t.Fatal("the request was not dropped")
+	}
+	select {
+	case ev := <-events:
+		if ev.taken == nil || ev.taken.id != 42 {
+			t.Fatalf("event %+v", ev)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the job GitLab gave after the runner gave up was not recorded")
+	}
+	if resp, _ := askForJob(t, srv.URL, ""); resp.StatusCode != http.StatusNoContent || g.jobRequests() != 1 {
+		t.Fatalf("later request: %d, upstream saw %d", resp.StatusCode, g.jobRequests())
 	}
 }

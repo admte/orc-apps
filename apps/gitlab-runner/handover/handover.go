@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -46,6 +47,7 @@ type handover struct {
 // event is what the proxy learns of the job from GitLab's answers.
 type event struct {
 	taken   *job   // direct: GitLab answered the runner's job request with this job
+	lost    bool   // direct: GitLab answered with a job whose answer could not be read
 	refused bool   // direct: GitLab refused the runner token before a job
 	verdict string // "success", "failed" or "canceled"
 	ended   bool   // GitLab refused the job's token before any verdict
@@ -84,6 +86,10 @@ type proxy struct {
 	idle     bool
 	refused  bool
 	stopping bool
+	touched  bool // the runner called the job's own endpoints
+
+	upstream  *url.URL
+	transport http.RoundTripper
 }
 
 // inboundKey carries the runner's own request to ModifyResponse.
@@ -92,7 +98,7 @@ type inboundKey struct{}
 // newProxy serves j to the runner, or, with j nil, lets the runner take one job
 // from upstream itself.
 func newProxy(j *job, upstream *url.URL, transport http.RoundTripper, events chan<- event) *proxy {
-	p := &proxy{direct: j == nil, events: events}
+	p := &proxy{direct: j == nil, events: events, upstream: upstream, transport: transport}
 	if j != nil {
 		p.setJob(j)
 	}
@@ -197,6 +203,7 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rec.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(rec, body)
 	default:
+		p.noteTouched(r.URL.Path)
 		p.reverse.ServeHTTP(rec, r)
 	}
 	logger.Printf("%s %s %d %dms", r.Method, redact(r.URL.Path), rec.status(), time.Since(start).Milliseconds())
@@ -215,24 +222,36 @@ func (p *proxy) askUpstream(w http.ResponseWriter, r *http.Request) {
 		p.noteIdle()
 		return
 	}
-	p.reverse.ServeHTTP(w, r)
+	// GitLab's answer is read whatever becomes of the runner's request: a job
+	// it hands out is taken, and is recorded as such, even if the runner has
+	// gone by the time it comes.
+	p.reverse.ServeHTTP(w, r.WithContext(context.WithoutCancel(r.Context())))
 }
 
 // observeJobRequest reads GitLab's answer to a job request passed upstream. A
-// job is read whole, its bytes passed on unchanged, and the runner holds it
-// from then on; a refusal before any job means GitLab refused the token.
+// 201 is the job taken, whatever follows: no later job request goes upstream.
+// The job is read whole, its bytes passed on unchanged, and the runner holds
+// it from then on; one that cannot be read is lost. A refusal before any job
+// means GitLab refused the token.
 func (p *proxy) observeJobRequest(resp *http.Response) error {
 	if resp.StatusCode != http.StatusCreated {
 		p.observeRunnerAnswer(resp.StatusCode)
 		return nil
 	}
+	p.mu.Lock()
+	p.served.Store(true)
+	p.mu.Unlock()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxJobBytes+1))
 	_ = resp.Body.Close()
-	if err != nil {
-		return fmt.Errorf("reading the job GitLab gave: %w", err)
+	if err == nil && len(body) > maxJobBytes {
+		err = errors.New("larger than 64 MiB")
 	}
-	if len(body) > maxJobBytes {
-		return errors.New("the job GitLab gave is larger than 64 MiB")
+	if err != nil {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		logger.Printf("GitLab gave the runner a job whose answer could not be read; the job is lost: %s", redact(err.Error()))
+		p.events <- event{lost: true}
+		return fmt.Errorf("reading the job GitLab gave: %w", err)
 	}
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	resp.ContentLength = int64(len(body))
@@ -263,10 +282,52 @@ func (p *proxy) observeJobRequest(resp *http.Response) error {
 		p.job = j
 		p.jobPath = "/api/v4/jobs/" + strconv.FormatInt(j.id, 10)
 	}
-	p.served.Store(true)
 	logger.Printf("GitLab gave the runner its job job=%d", j.id)
 	p.events <- event{taken: j}
 	return nil
+}
+
+// noteTouched records a runner call on the job's own endpoints.
+func (p *proxy) noteTouched(path string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.jobPath != "" && (path == p.jobPath || strings.HasPrefix(path, p.jobPath+"/")) {
+		p.touched = true
+	}
+}
+
+// failUntouched tells GitLab at once that a job taken from it failed, when
+// the runner never called any of the job's endpoints and GitLab gave no
+// verdict: its answer was lost between this proxy and the runner, and GitLab
+// would otherwise hold the job running until it drops it.
+func (p *proxy) failUntouched() {
+	p.mu.Lock()
+	j, skip := p.job, p.touched || p.verdict != "" || p.ended
+	p.mu.Unlock()
+	if j == nil || skip || j.token == "" {
+		return
+	}
+	body, _ := json.Marshal(map[string]string{
+		"token": j.token, "state": "failed", "failure_reason": "runner_system_failure",
+	})
+	u := *p.upstream
+	u.Path = strings.TrimRight(u.Path, "/") + "/api/v4/jobs/" + strconv.FormatInt(j.id, 10)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u.String(), bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("JOB-TOKEN", j.token)
+	resp, err := (&http.Client{Transport: p.transport}).Do(req)
+	if err != nil {
+		logger.Printf("could not tell GitLab the job the runner never ran failed job=%d error=%s", j.id, redact(err.Error()))
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	_ = resp.Body.Close()
+	logger.Printf("told GitLab the job the runner never ran failed job=%d status=%d", j.id, resp.StatusCode)
 }
 
 // observeRunnerAnswer reads GitLab's answer to a call made with the runner
@@ -418,7 +479,11 @@ func (h *handover) run() (int, error) {
 	}
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
-	return h.supervise(cmd.Process.Pid, exited, events, sigs), nil
+	code := h.supervise(cmd.Process.Pid, exited, events, sigs)
+	if h.direct {
+		p.failUntouched()
+	}
+	return code, nil
 }
 
 // How a run ended, before it is turned into an exit code.
@@ -432,6 +497,7 @@ const (
 	endStopped                   // a stop signal, before any verdict
 	endRunnerExit                // the runner exited on its own before any verdict
 	endRefused                   // direct: GitLab refused the runner token
+	endLost                      // direct: GitLab gave a job whose answer could not be read
 )
 
 type ending struct {
@@ -470,6 +536,10 @@ func (h *handover) exitCode(e ending) int {
 		outcome = "passed its deadline"
 	case endStopped:
 		outcome = "stopped before a verdict"
+	}
+	if e.kind == endLost {
+		fmt.Println("gitlab-runner: job lost; GitLab's answer could not be read")
+		return 0
 	}
 	switch {
 	case e.kind == endRefused:
@@ -524,6 +594,9 @@ func (h *handover) supervise(pid int, exited <-chan error, events <-chan event, 
 		switch {
 		case ev.refused:
 			return end(endRefused), true
+		case ev.lost:
+			taken = true
+			return end(endLost), true
 		case ev.taken != nil:
 			taken, jobID = true, ev.taken.id
 			arm(ev.taken)
